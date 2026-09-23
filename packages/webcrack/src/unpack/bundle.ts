@@ -4,12 +4,26 @@ import { dirname, join, normalize, relative } from 'node:path';
 import type { Module } from './module';
 
 export class Bundle {
-  type: 'webpack' | 'browserify' | 'esbuild' | 'metro';
+  type:
+    | 'webpack'
+    | 'browserify'
+    | 'esbuild'
+    | 'metro'
+    | 'rollup'
+    | 'parcel'
+    | 'turbopack';
   entryId: string;
   modules: Map<string, Module>;
 
   constructor(
-    type: 'webpack' | 'browserify' | 'esbuild' | 'metro',
+    type:
+      | 'webpack'
+      | 'browserify'
+      | 'esbuild'
+      | 'metro'
+      | 'rollup'
+      | 'parcel'
+      | 'turbopack',
     entryId: string,
     modules: Map<string, Module>,
   ) {

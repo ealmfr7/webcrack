@@ -6,6 +6,9 @@ import { unpackBrowserify } from './browserify';
 import type { Bundle } from './bundle';
 import { unpackEsbuild } from './esbuild';
 import { unpackMetro } from './metro';
+import { unpackParcel } from './parcel';
+import { unpackRollup } from './rollup';
+import { unpackTurbopack } from './turbopack';
 import unpackWebpack4 from './webpack/unpack-webpack-4.js';
 import unpackWebpack5 from './webpack/unpack-webpack-5.js';
 import unpackWebpackChunk from './webpack/unpack-webpack-chunk.js';
@@ -24,6 +27,9 @@ export function unpackAST(
     unpackBrowserify.visitor(options),
     unpackEsbuild.visitor(options),
     unpackMetro.visitor(options),
+    unpackRollup.visitor(options),
+    unpackParcel.visitor(options),
+    unpackTurbopack.visitor(options),
   ]);
   traverse(ast, visitor, undefined, { changes: 0 });
   // TODO: applyTransforms(ast, [unpackWebpack, unpackBrowserify]) instead

@@ -14,9 +14,11 @@ import controlFlowSwitch from './control-flow-switch';
 import deadCode from './dead-code';
 import opaquePredicates from './opaque-predicates';
 import { findDecoders } from './decoder';
+import evalUnwrap from './eval-unwrap';
 import inlineDecodedStrings from './inline-decoded-strings';
 import inlineDecoderWrappers from './inline-decoder-wrappers';
 import inlineObjectProps from './inline-object-props';
+import packer from './packer';
 import { findStringArray } from './string-array';
 import type { Sandbox } from './vm';
 import { VMDecoder, createBrowserSandbox, createNodeSandbox } from './vm';
@@ -34,6 +36,24 @@ export default {
   tags: ['unsafe'],
   scope: true,
   async run(ast, state, sandbox) {
+    // Unwrap packing/eval layers first, repeated until an iteration yields
+    // no changes. JSFuck/JJEncode/AAEncode decoders will join this list
+    // later. (Currently all entries are no-op stubs, so this changes
+    // nothing.)
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const changesBeforeUnwrap = state.changes;
+      state.changes += applyTransforms(ast, [packer, evalUnwrap]).changes;
+      if (state.changes === changesBeforeUnwrap) break;
+    }
+    if (state.changes > 0) {
+      traverse(ast, {
+        Program(path) {
+          path.scope.crawl();
+          path.stop();
+        },
+      });
+    }
+
     if (!sandbox) return;
 
     const logger = debug('webcrack:deobfuscate');
