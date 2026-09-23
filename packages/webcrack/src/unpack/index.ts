@@ -15,30 +15,52 @@ import unpackWebpackChunk from './webpack/unpack-webpack-chunk.js';
 
 export { Bundle } from './bundle';
 
+export interface UnpackASTOptions {
+  /**
+   * Computes additional module-path mappings from the freshly created
+   * bundle. Runs after bundle creation but before `applyMappings` (and
+   * therefore before `applyTransforms`, so structural hashes still match
+   * the raw extracted modules). The returned mappings are merged UNDER the
+   * explicit `mappings` argument: explicit keys win, and a returned entry
+   * for a path an explicit mapping already uses is dropped, so
+   * `applyMappings` never sees the same path twice.
+   */
+  libraryMappings?: (bundle: Bundle) => Record<string, m.Matcher<unknown>>;
+}
+
 export function unpackAST(
   ast: t.Node,
   mappings: Record<string, m.Matcher<unknown>> = {},
+  options: UnpackASTOptions = {},
 ): Bundle | undefined {
-  const options: { bundle: Bundle | undefined } = { bundle: undefined };
+  const state: { bundle: Bundle | undefined } = { bundle: undefined };
   const visitor = visitors.merge([
-    unpackWebpack4.visitor(options),
-    unpackWebpack5.visitor(options),
-    unpackWebpackChunk.visitor(options),
-    unpackBrowserify.visitor(options),
-    unpackEsbuild.visitor(options),
-    unpackMetro.visitor(options),
-    unpackRollup.visitor(options),
-    unpackParcel.visitor(options),
-    unpackTurbopack.visitor(options),
+    unpackWebpack4.visitor(state),
+    unpackWebpack5.visitor(state),
+    unpackWebpackChunk.visitor(state),
+    unpackBrowserify.visitor(state),
+    unpackEsbuild.visitor(state),
+    unpackMetro.visitor(state),
+    unpackRollup.visitor(state),
+    unpackParcel.visitor(state),
+    unpackTurbopack.visitor(state),
   ]);
   traverse(ast, visitor, undefined, { changes: 0 });
   // TODO: applyTransforms(ast, [unpackWebpack, unpackBrowserify]) instead
-  if (options.bundle) {
-    options.bundle.applyMappings(mappings);
-    options.bundle.applyTransforms();
+  if (state.bundle) {
+    const libraryMappings = options.libraryMappings?.(state.bundle) ?? {};
+    // Library mappings sit under the explicit ones: explicit keys win.
+    const mergedMappings: Record<string, m.Matcher<unknown>> = {
+      ...libraryMappings,
+    };
+    for (const [path, matcher] of Object.entries(mappings)) {
+      mergedMappings[path] = matcher;
+    }
+    state.bundle.applyMappings(mergedMappings);
+    state.bundle.applyTransforms();
     debug('webcrack:unpack')(
-      `Bundle: ${options.bundle.type}, modules: ${options.bundle.modules.size}, entry id: ${options.bundle.entryId}`,
+      `Bundle: ${state.bundle.type}, modules: ${state.bundle.modules.size}, entry id: ${state.bundle.entryId}`,
     );
   }
-  return options.bundle;
+  return state.bundle;
 }
