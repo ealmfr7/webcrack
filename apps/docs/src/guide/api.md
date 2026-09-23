@@ -93,8 +93,11 @@ pipeline stage (`{ name, changes, diff }`, with a unified line diff).
 - `trace.diff` (when `trace` is enabled)
 
 > [!NOTE]
-> Concurrent `webcrack()` calls with `trace` enabled are not supported —
-> await each call before starting the next one.
+> Tracing is reentrant on Node.js (each call collects only its own entries
+> via `AsyncLocalStorage`), so concurrent `webcrack()` calls with `trace`
+> enabled are supported. Where `AsyncLocalStorage` is unavailable (e.g.
+> browsers) tracing falls back to a single module-global tracer, so
+> overlapping async calls may observe each other's entries there.
 
 ## Named Exports
 
@@ -111,10 +114,14 @@ import {
   matchModules,
   detectInterpreters,
   labelHandlers,
+  disassemble,
+  formatDisassembly,
+  liftDisassembly,
 } from 'webcrack';
 ```
 
-- `unpackChunks` splits multi-chunk output into separate bundles.
+- `unpackChunks` merges several chunk files (runtime/entry plus jsonp,
+  Turbopack or Rollup/Vite chunks) into a single bundle.
 - `renameWithLLM` renames short/mangled bindings using a caller-provided
   `suggestNames` callback (no network access inside webcrack itself).
 - `extractReport`, `moduleGraph`, `callGraph`, `toDot` return the same report
@@ -122,6 +129,9 @@ import {
 - `fingerprint` / `matchModules` identify known open-source library modules
   (used by the `libraryMappings` option).
 - `detectInterpreters` / `labelHandlers` analyze VM-based obfuscation.
+- `disassemble` / `formatDisassembly` disassemble VM-interpreter bytecode,
+  and `liftDisassembly` (experimental) lifts a disassembly back to
+  JavaScript code.
 - Each function has matching TypeScript types (e.g. `Report`,
   `Graph`/`GraphNode`/`GraphEdge`, `LibraryMatch`, `InterpreterInfo`,
   `HandlerLabel`, `RenameLLMOptions`).

@@ -79,9 +79,9 @@ call name as `label`. Calls from the top level use a `<toplevel>` caller
 node.
 
 `toDot(graph, name?)` serializes a graph to Graphviz DOT (node ids and
-labels quoted and escaped; externals styled dashed), and `toJSON(graph)`
-serializes the same sorted `{ nodes, edges }` structure that `save()` writes
-to the `.json` files:
+labels quoted and escaped; externals styled dashed). The `.json` files
+`save()` writes hold the same graph as sorted `{ nodes, edges }` JSON
+(nodes/edges sorted by id):
 
 ```js
 import { toDot } from 'webcrack';
