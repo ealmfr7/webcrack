@@ -129,6 +129,17 @@ export default {
           const replacement = toLiteral(evaluated.value);
           if (replacement === null) return;
 
+          // A bare string literal at the start of a function/program body is
+          // a directive prologue, so folding `"use" + " strict"` there into
+          // `"use strict"` would silently enable strict mode. Only string
+          // results can become directives, so only those are skipped.
+          if (
+            t.isStringLiteral(replacement) &&
+            path.parentPath.isExpressionStatement()
+          ) {
+            return;
+          }
+
           path.replaceWith(replacement);
           path.skip();
           this.changes++;

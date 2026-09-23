@@ -7,10 +7,10 @@ import constantFolding from '../constant-folding';
 const expectJS = testTransform(constantFolding);
 
 test('fold string concatenation', () =>
-  expectJS(`"a" + "b";`).toMatchInlineSnapshot(`"ab";`));
+  expectJS(`x = "a" + "b";`).toMatchInlineSnapshot(`x = "ab";`));
 
 test('fold nested string concatenation', () =>
-  expectJS(`"a" + "b" + "c";`).toMatchInlineSnapshot(`"abc";`));
+  expectJS(`x = "a" + "b" + "c";`).toMatchInlineSnapshot(`x = "abc";`));
 
 test('fold numeric operations', () => {
   expectJS(`1 + 2 * 3;`).toMatchInlineSnapshot(`7;`);
@@ -34,8 +34,8 @@ test('fold JSFuck-ish unary expressions', () => {
 
 test('fold unary on literals', () => {
   expectJS(`-"5";`).toMatchInlineSnapshot(`-5;`);
-  expectJS(`typeof "x";`).toMatchInlineSnapshot(`"string";`);
-  expectJS(`typeof 1;`).toMatchInlineSnapshot(`"number";`);
+  expectJS(`x = typeof "x";`).toMatchInlineSnapshot(`x = "string";`);
+  expectJS(`x = typeof 1;`).toMatchInlineSnapshot(`x = "number";`);
   expectJS(`!"a";`).toMatchInlineSnapshot(`false;`);
 });
 
@@ -46,7 +46,7 @@ test('fold comparisons of literals', () => {
 });
 
 test('fold mixed string and number coercion', () =>
-  expectJS(`1 + "2";`).toMatchInlineSnapshot(`"12";`));
+  expectJS(`x = 1 + "2";`).toMatchInlineSnapshot(`x = "12";`));
 
 test('keep -0 correct', () =>
   expectJS(`0 / -1;`).toMatchInlineSnapshot(`-0;`));
@@ -73,6 +73,15 @@ test('do not fold calls', () => {
   expectJS(`foo();`).toMatchInlineSnapshot(`foo();`);
 });
 
+test('do not fold bare expression statements (directive prologue risk)', () => {
+  expectJS(`"use" + " strict";`).toMatchInlineSnapshot(`"use" + " strict";`);
+  expectJS(`function f() { "use" + " strict"; }`).toMatchInlineSnapshot(`
+    function f() {
+      "use" + " strict";
+    }
+  `);
+});
+
 test('do not fold member access with possible getters', () => {
   expectJS(`({a: 1}).a + 1;`).toMatchInlineSnapshot(`
     ({
@@ -80,6 +89,13 @@ test('do not fold member access with possible getters', () => {
     }).a + 1;
   `);
   expectJS(`o.x === 1;`).toMatchInlineSnapshot(`o.x === 1;`);
+  expectJS(`({ get a() { return 1; } }).a + 1;`).toMatchInlineSnapshot(`
+    ({
+      get a() {
+        return 1;
+      }
+    }).a + 1;
+  `);
 });
 
 test('do not fold typeof on non-literals', () =>
