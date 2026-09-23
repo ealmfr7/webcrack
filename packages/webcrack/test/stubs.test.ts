@@ -12,22 +12,22 @@ import { unpackParcel } from '../src/unpack/parcel';
 import { unpackRollup } from '../src/unpack/rollup';
 
 // Stub unpackers expose a .visitor(options) returning an empty visitor
-// (unpackTurbopack was implemented in task 3.3 and is covered by
-// src/unpack/test/turbopack.test.ts instead)
-const unpackers = [unpackRollup, unpackParcel];
+// (unpackRollup was implemented in task 3.1 and unpackTurbopack in task 3.3;
+// both are covered by their own test files instead)
+const stubUnpackers = [unpackParcel];
 // Stub transforms are no-op Transform objects
 const transforms = [spreadHelpers, slicedToArray, tsEnum, packer, evalUnwrap];
 
 const SAMPLE = 'var x = [1, 2, 3];\nfunction f(a) { return a + x.length; }';
 
 test('stub unpackers return an empty visitor', () => {
-  for (const unpacker of unpackers) {
+  for (const unpacker of stubUnpackers) {
     expect(unpacker.visitor({ bundle: undefined })).toEqual({});
   }
 });
 
 test('stub unpackers do not claim any bundle', () => {
-  for (const unpacker of unpackers) {
+  for (const unpacker of [...stubUnpackers, unpackRollup]) {
     const ast = parse('var x = 1;');
     const options: { bundle: Bundle | undefined } = { bundle: undefined };
     applyTransform(ast, unpacker, options);
