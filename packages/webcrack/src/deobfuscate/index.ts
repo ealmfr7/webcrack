@@ -1,3 +1,4 @@
+import traverse from '@babel/traverse';
 import debug from 'debug';
 import type { AsyncTransform } from '../ast-utils';
 import {
@@ -83,6 +84,18 @@ export default {
     // changes. New passes (constant folding, opaque predicates, ...)
     // go into the list below.
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      if (iteration > 0) {
+        // Babel caches scope info per node across traversals, so bindings
+        // still reference nodes removed by the previous iteration. Re-collect
+        // them before re-running scope-dependent passes.
+        traverse(ast, {
+          Program(path) {
+            path.scope.crawl();
+            path.stop();
+          },
+        });
+      }
+
       const changesBeforeIteration = state.changes;
 
       state.changes += applyTransform(ast, inlineObjectProps).changes;

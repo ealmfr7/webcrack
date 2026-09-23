@@ -85,14 +85,14 @@ export function inlineArrayElements(
 export function inlineObjectProperties(
   binding: Binding,
   property = m.objectProperty(),
-): void {
+): boolean {
   const varDeclarator = binding.path.node;
   const objectProperties = m.capture(m.arrayOf(property));
   const varMatcher = m.variableDeclarator(
     m.identifier(binding.identifier.name),
     m.objectExpression(objectProperties),
   );
-  if (!varMatcher.match(varDeclarator)) return;
+  if (!varMatcher.match(varDeclarator)) return false;
 
   const propertyMap = new Map(
     objectProperties.current!.map((p) => [getPropName(p.key), p.value]),
@@ -104,7 +104,7 @@ export function inlineObjectProperties(
       return propertyMap.has(propName);
     })
   )
-    return;
+    return false;
 
   binding.referencePaths.forEach((ref) => {
     const memberPath = ref.parentPath as NodePath<t.MemberExpression>;
@@ -115,6 +115,7 @@ export function inlineObjectProperties(
   });
 
   binding.path.remove();
+  return true;
 }
 
 /**
