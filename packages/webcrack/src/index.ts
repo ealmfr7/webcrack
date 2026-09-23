@@ -30,6 +30,7 @@ import {
 import jsx from './transforms/jsx';
 import jsxNew from './transforms/jsx-new';
 import mangle from './transforms/mangle';
+import renameHeuristics from './transforms/rename-heuristics';
 import transpile from './transpile';
 import unminify from './unminify';
 import {
@@ -83,6 +84,12 @@ export interface Options {
    */
   mangle?: boolean | ((id: string) => boolean);
   /**
+   * Rename short or mangled variable names using heuristics
+   * (module names, event parameters, loop indices, props, ...).
+   * @default false
+   */
+  renameHeuristics?: boolean;
+  /**
    * Run AST transformations after specific stages
    */
   plugins?: Partial<Record<Stage, Plugin[]>>;
@@ -115,6 +122,7 @@ function mergeOptions(options: Options): asserts options is Required<Options> {
     unpack: true,
     deobfuscate: true,
     mangle: false,
+    renameHeuristics: false,
     plugins: options.plugins ?? {},
     mappings: () => ({}),
     onProgress: () => {},
@@ -190,6 +198,7 @@ export async function webcrack(
     plugins.afterUnminify &&
       (() => runPlugins(ast, plugins.afterUnminify!, state)),
 
+    options.renameHeuristics && (() => applyTransform(ast, renameHeuristics)),
     options.mangle &&
       (() =>
         applyTransform(
