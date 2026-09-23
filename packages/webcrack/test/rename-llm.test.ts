@@ -214,6 +214,46 @@ test('unknown suggestion keys are ignored', async () => {
   expect(log).toEqual([]);
 });
 
+test('batchSize 0 is clamped to 1', async () => {
+  const seen: string[][] = [];
+  const suggestNames: SuggestNames = (batch) => {
+    seen.push(batch.map((info) => info.name));
+    return Promise.resolve({});
+  };
+  await run('var a = 1; var b = 2; var c = 3;', suggestNames, {
+    batchSize: 0,
+  });
+  expect(seen).toEqual([['a'], ['b'], ['c']]);
+});
+
+test('non-finite batchSize falls back to the default', async () => {
+  const seen: string[][] = [];
+  const suggestNames: SuggestNames = (batch) => {
+    seen.push(batch.map((info) => info.name));
+    return Promise.resolve({});
+  };
+  await run('var a = 1; var b = 2; var c = 3;', suggestNames, {
+    batchSize: NaN,
+  });
+  expect(seen).toEqual([['a', 'b', 'c']]);
+});
+
+test('import bindings are never renamed', async () => {
+  const seen: string[] = [];
+  const suggestNames: SuggestNames = (batch) => {
+    seen.push(...batch.map((info) => info.name));
+    return Promise.resolve({ x: 'ex', a: 'alpha' });
+  };
+  const { code, log } = await run(
+    'import x from "./mod.js"; var a = 1; console.log(x, a);',
+    suggestNames,
+  );
+  expect(seen).toEqual(['a']);
+  expect(code).toContain('import x from');
+  expect(code).toContain('alpha');
+  expect(log).toEqual([{ from: 'a', to: 'alpha', kind: 'var' }]);
+});
+
 test('callback receives name, kind, context and scope info', async () => {
   let received: LLMBindingInfo[] = [];
   await run('var a = 1;', (batch) => {
