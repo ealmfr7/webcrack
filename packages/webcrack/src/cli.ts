@@ -11,6 +11,7 @@ import {
   commandSuggestNames,
   runMultiInput,
   toWebcrackOptions,
+  validateLLMFlags,
   type CLIFlags,
 } from './cli-lib.js';
 import { webcrack } from './index.js';
@@ -77,6 +78,12 @@ program
       llmTimeout = 30000,
       ...flags
     } = program.opts<Options>();
+    const validationError = validateLLMFlags({
+      sourceMap: flags.sourceMap,
+      llmRenameCommand,
+      llmTimeout,
+    });
+    if (validationError !== undefined) program.error(validationError);
     const options = toWebcrackOptions(flags);
     const suggestNames =
       llmRenameCommand === undefined

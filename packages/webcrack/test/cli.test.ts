@@ -6,8 +6,9 @@ import {
   applyLLMRename,
   commandSuggestNames,
   runMultiInput,
+  validateLLMFlags,
 } from '../src/cli-lib';
-import { webcrack } from '../src/index.js';
+import { renameWithLLM, webcrack } from '../src/index.js';
 
 const MULTI_CHUNK_DIR = join(
   __dirname,
@@ -162,6 +163,121 @@ describe('runMultiInput', () => {
       expect(files).toContain('report.json');
       expect(files).toContain('graph.calls.json');
       expect(files).toContain('graph.calls.dot');
+    }
+  });
+});
+
+describe('validateLLMFlags', () => {
+  test('rejects --source-map combined with --llm-rename-command', () => {
+    expect(
+      validateLLMFlags({
+        sourceMap: true,
+        llmRenameCommand: 'llm-rename',
+        llmTimeout: 30000,
+      }),
+    ).toMatch(/--source-map.*--llm-rename-command/);
+  });
+
+  test.each(['abc', Number.NaN, 0, -5])(
+    'rejects --llm-timeout %p',
+    (llmTimeout) => {
+      expect(
+        validateLLMFlags({ llmRenameCommand: 'llm-rename', llmTimeout }),
+      ).toBe('--llm-timeout must be a positive integer');
+    },
+  );
+
+  test('accepts valid flag combinations', () => {
+    expect(validateLLMFlags({})).toBeUndefined();
+    expect(validateLLMFlags({ sourceMap: true })).toBeUndefined();
+    expect(
+      validateLLMFlags({ llmRenameCommand: 'llm-rename', llmTimeout: 30000 }),
+    ).toBeUndefined();
+  });
+});
+
+describe('applyLLMRename with bundle', () => {
+  const WEBPACK_SAMPLE = join(
+    __dirname,
+    '..',
+    'src',
+    'unpack',
+    'test',
+    'samples',
+    'webpack-4.js',
+  );
+
+  test('offers each module binding to suggestNames exactly once', async () => {
+    const code = await readFile(WEBPACK_SAMPLE, 'utf8');
+    const options = { deobfuscate: false, unminify: false, jsx: false };
+    const result = await webcrack(code, options);
+    expect(result.bundle).toBeDefined();
+
+    // Independent oracle: the bindings offered by a single rename pass
+    // over each module of a fresh result for the same input.
+    const fresh = await webcrack(code, options);
+    const expected: string[] = [];
+    for (const module of fresh.bundle!.modules.values()) {
+      await renameWithLLM(module.ast, {
+        suggestNames: (batch) => {
+          expected.push(...batch.map((binding) => binding.name));
+          return Promise.resolve({});
+        },
+      });
+    }
+    expect(expected.length).toBeGreaterThan(0);
+
+    const actual: string[] = [];
+    const logEntries = await applyLLMRename(result, (batch) => {
+      actual.push(...batch.map((binding) => binding.name));
+      return Promise.resolve({});
+    });
+    expect(actual.sort()).toEqual(expected.sort());
+    expect(logEntries).toEqual([]);
+  });
+
+  test('renames module code without touching the top-level code', async () => {
+    const code = await readFile(WEBPACK_SAMPLE, 'utf8');
+    const result = await webcrack(code, {
+      deobfuscate: false,
+      unminify: false,
+      jsx: false,
+    });
+    expect(result.bundle).toBeDefined();
+    const topLevelBefore = result.code;
+    const logEntries = await applyLLMRename(result, (batch) => {
+      const mapping: Record<string, string> = {};
+      for (const binding of batch) {
+        mapping[binding.name] = `renamed_${binding.name}`;
+      }
+      return Promise.resolve(mapping);
+    });
+    expect(logEntries.length).toBeGreaterThan(0);
+    expect(result.code).toBe(topLevelBefore);
+    let renamedModules = 0;
+    for (const module of result.bundle!.modules.values()) {
+      if (/renamed_/.test(module.code)) renamedModules++;
+    }
+    expect(renamedModules).toBeGreaterThan(0);
+  });
+});
+
+describe('commandSuggestNames early exit', () => {
+  test('reports the exit code when the command exits without reading stdin', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const suggest = commandSuggestNames(
+        `node -e "process.stdin.destroy();process.exit(3)"`,
+        10000,
+      );
+      await expect(
+        suggest([
+          { name: 'a', kind: 'param', context: 'a', scopeType: 'Function' },
+        ]),
+      ).rejects.toThrow(/exited with code 3/);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
   });
 });
