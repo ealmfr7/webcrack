@@ -2,6 +2,26 @@ import { parse } from '@babel/parser';
 import * as t from '@babel/types';
 import type { Transform } from '../ast-utils';
 
+// Nodes re-parsed from the decoded payload carry `loc` relative to that
+// payload. With Options.sourceMap (keepLoc) those positions would map the
+// output to made-up input locations, so strip them and point the spliced
+// top-level statements at the eval statement they replace instead.
+function stripLoc(node: t.Node): void {
+  node.loc = undefined;
+  const keys = t.VISITOR_KEYS[node.type];
+  if (!keys) return;
+  for (const key of keys) {
+    const value: unknown = (node as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (t.isNode(child)) stripLoc(child);
+      }
+    } else if (t.isNode(value)) {
+      stripLoc(value);
+    }
+  }
+}
+
 // Dean Edwards packer unwrapper.
 //
 // Detects
@@ -44,6 +64,11 @@ export default {
           return;
         }
 
+        const loc = path.node.loc;
+        for (const statement of program.body) {
+          stripLoc(statement);
+          if (loc != null) statement.loc = loc;
+        }
         path.replaceWithMultiple(program.body);
         this.changes++;
       },
