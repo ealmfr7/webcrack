@@ -34,7 +34,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 
 - [x] Decoders de strings genéricos (funciones puras con argumentos literales, evaluadas en el sandbox)
 - [x] Packer de Dean Edwards (`eval(function(p,a,c,k,e,d){...})`)
-- [x] JSFuck, JJEncode, AAEncode
+- [~] JSFuck, JJEncode, AAEncode (JSFuck hecho; JJEncode/AAEncode reales pendientes)
 - [x] `Function(...)()` / `eval` anidados (desenvolverlos capa por capa)
 - [ ] Patrones de JScrambler
 
