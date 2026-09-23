@@ -240,3 +240,30 @@ test('labeled if keeps its label and block', () =>
       break lbl;
     }
   `));
+
+test('else-if with var in dropped branch keeps the var', () =>
+  expectJS(`
+    if (x) {
+    } else if (5 > 3) {
+      a();
+    } else {
+      var z = 1;
+    }
+  `).toMatchInlineSnapshot(`
+    if (x) {} else {
+      var z;
+      a();
+    }
+  `));
+
+test('if as loop body with var in dropped branch keeps the var', () =>
+  expectJS(`
+    for (;;) if (5 > 3) a(); else {
+      var z;
+    }
+  `).toMatchInlineSnapshot(`
+    for (;;) {
+      var z;
+      a();
+    }
+  `));

@@ -68,19 +68,29 @@ function replace(
   dropped: t.Node | null | undefined,
 ) {
   // `var` and function declarations in the dropped branch are hoisted, so
-  // declare them before replacing to avoid turning uses into ReferenceErrors.
-  if (path.isIfStatement() && dropped) {
-    const hoisted = collectHoistedVars(dropped);
-    if (hoisted.length) path.insertBefore(varDeclaration(hoisted));
-  }
+  // they must survive in the replacement itself (`var` is function-scoped,
+  // so it can go anywhere in it). insertBefore must not be used: outside a
+  // statement list Babel wraps the node in a block and repoints `path`, so
+  // the following replacement would discard the var.
+  const varDecl =
+    path.isIfStatement() && dropped ? hoistedVarDecl(dropped) : null;
   if (t.isBlockStatement(replacement.node)) {
+    const body = varDecl
+      ? [varDecl, ...replacement.node.body]
+      : [...replacement.node.body];
     if (
       path.isIfStatement() &&
       (path.parentPath.isLabeledStatement() || collides(replacement, path.scope))
     ) {
       // Splicing would drop the label (breaking `break label`), or hoist
       // `let`/`const` into the outer scope unsafely: keep the block.
-      path.replaceWith(replacement.node);
+      path.replaceWith(t.blockStatement(body));
+      return;
+    }
+    if (!Array.isArray(path.container)) {
+      // Single-statement position (else-if alternate, loop body, ...):
+      // multiple statements cannot be spliced here, keep the block.
+      path.replaceWith(t.blockStatement(body));
       return;
     }
     // If statements can contain variables that shadow variables in the parent scope.
@@ -95,10 +105,19 @@ function replace(
       binding.scope = path.scope;
       path.scope.bindings[binding.identifier.name] = binding;
     }
-    path.replaceWithMultiple(replacement.node.body);
+    path.replaceWithMultiple(body);
+  } else if (varDecl && path.isIfStatement()) {
+    path.replaceWith(
+      t.blockStatement([varDecl, replacement.node as t.Statement]),
+    );
   } else {
     path.replaceWith(replacement);
   }
+}
+
+function hoistedVarDecl(node: t.Node): t.VariableDeclaration | null {
+  const names = collectHoistedVars(node);
+  return names.length ? varDeclaration(names) : null;
 }
 
 function removePreservingHoisted(
