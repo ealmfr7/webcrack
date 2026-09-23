@@ -14,6 +14,7 @@ import controlFlowSwitch from './control-flow-switch';
 import deadCode from './dead-code';
 import opaquePredicates from './opaque-predicates';
 import { findDecoders } from './decoder';
+import encodedPayload from './encoded-payload';
 import evalUnwrap from './eval-unwrap';
 import genericDecoders from './generic-decoders';
 import inlineDecodedStrings from './inline-decoded-strings';
@@ -38,12 +39,19 @@ export default {
   scope: true,
   async run(ast, state, sandbox) {
     // Unwrap packing/eval layers first, repeated until an iteration yields
-    // no changes. JSFuck/JJEncode/AAEncode decoders will join this list
-    // later. (Currently all entries are no-op stubs, so this changes
-    // nothing.)
+    // no changes. `encodedPayload` evaluates encoded (JSFuck/JJEncode/
+    // AAEncode) payloads in the sandbox and rewrites them as
+    // `Function("...")()` calls for `evalUnwrap` to splice on the next
+    // iteration. It is async, so it runs as its own step; without a
+    // sandbox it is a no-op and the loop behaves as before.
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const changesBeforeUnwrap = state.changes;
       state.changes += applyTransforms(ast, [packer, evalUnwrap]).changes;
+      if (sandbox) {
+        state.changes += (
+          await applyTransformAsync(ast, encodedPayload, sandbox)
+        ).changes;
+      }
       if (state.changes === changesBeforeUnwrap) break;
     }
     if (state.changes > 0) {
