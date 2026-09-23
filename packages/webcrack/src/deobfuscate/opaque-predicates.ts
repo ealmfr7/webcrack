@@ -20,13 +20,20 @@ export default {
           // (e.g. sequence expressions), so bail unless the test is pure.
           if (!isSideEffectFree(path.node.test)) return;
 
-          const truthy = path.get('test').evaluateTruthy();
+          // Babel's evaluateTruthy() dereferences path.scope, which is null
+          // for nodes created during the traversal: the deobfuscate
+          // fixpoint loop runs with noScope.
+          const truthy = safeEvaluateTruthy(path.get('test'));
           if (truthy == null) return;
 
           if (truthy) {
             replace(path, path.get('consequent'), path.node.alternate);
           } else if (path.node.alternate) {
-            replace(path, path.get('alternate') as NodePath, path.node.consequent);
+            replace(
+              path,
+              path.get('alternate') as NodePath,
+              path.node.consequent,
+            );
           } else if (path.isIfStatement()) {
             removePreservingHoisted(path, path.node.consequent);
           } else {
@@ -37,22 +44,23 @@ export default {
         },
       },
       LogicalExpression(path) {
-        if (path.node.operator !== '&&' && path.node.operator !== '||')
-          return;
+        if (path.node.operator !== '&&' && path.node.operator !== '||') return;
         if (!isSideEffectFree(path.node.left)) return;
 
-        const truthy = path.get('left').evaluateTruthy();
+        const truthy = safeEvaluateTruthy(path.get('left'));
         if (truthy == null) return;
 
         const takeRight =
           (path.node.operator === '&&' && truthy) ||
           (path.node.operator === '||' && !truthy);
-        path.replaceWith(takeRight ? path.get('right').node : path.get('left').node);
+        path.replaceWith(
+          takeRight ? path.get('right').node : path.get('left').node,
+        );
         this.changes++;
       },
       WhileStatement(path) {
         if (!isSideEffectFree(path.node.test)) return;
-        const truthy = path.get('test').evaluateTruthy();
+        const truthy = safeEvaluateTruthy(path.get('test'));
         // A truthy test means an infinite loop, leave it alone.
         if (truthy == null || truthy) return;
         removePreservingHoisted(path, path.node.body);
@@ -74,14 +82,20 @@ function replace(
   // the following replacement would discard the var.
   const varDecl =
     path.isIfStatement() && dropped ? hoistedVarDecl(dropped) : null;
+  // The deobfuscate fixpoint loop runs with noScope, where path.scope is
+  // null. Binding-based checks and renames are skipped then; the fallback
+  // is always the safe option (keep the block).
+  const scope: Scope | null = path.scope ?? null;
   if (t.isBlockStatement(replacement.node)) {
     const body = varDecl
       ? [varDecl, ...replacement.node.body]
       : [...replacement.node.body];
-    if (
-      path.isIfStatement() &&
-      (path.parentPath.isLabeledStatement() || collides(replacement, path.scope))
-    ) {
+    const keepBlock =
+      path.parentPath.isLabeledStatement() ||
+      (scope
+        ? collides(replacement, scope)
+        : hasLexicalDeclarations(replacement.node));
+    if (path.isIfStatement() && keepBlock) {
       // Splicing would drop the label (breaking `break label`), or hoist
       // `let`/`const` into the outer scope unsafely: keep the block.
       path.replaceWith(t.blockStatement(body));
@@ -93,17 +107,19 @@ function replace(
       path.replaceWith(t.blockStatement(body));
       return;
     }
-    // If statements can contain variables that shadow variables in the parent scope.
-    // Since the block scope is merged with the parent scope, we need to rename those
-    // variables to avoid duplicate declarations.
-    const childBindings = replacement.scope.bindings;
-    for (const name in childBindings) {
-      const binding = childBindings[name];
-      if (path.scope.hasOwnBinding(name)) {
-        renameFast(binding, path.scope.generateUid(name));
+    if (scope !== null) {
+      // If statements can contain variables that shadow variables in the parent scope.
+      // Since the block scope is merged with the parent scope, we need to rename those
+      // variables to avoid duplicate declarations.
+      const childBindings = replacement.scope.bindings;
+      for (const name in childBindings) {
+        const binding = childBindings[name];
+        if (scope.hasOwnBinding(name)) {
+          renameFast(binding, scope.generateUid(name));
+        }
+        binding.scope = scope;
+        scope.bindings[binding.identifier.name] = binding;
       }
-      binding.scope = path.scope;
-      path.scope.bindings[binding.identifier.name] = binding;
     }
     path.replaceWithMultiple(body);
   } else if (varDecl && path.isIfStatement()) {
@@ -130,6 +146,47 @@ function removePreservingHoisted(
     path.replaceWith(varDeclaration(hoisted));
   } else {
     path.remove();
+  }
+}
+
+// Syntactic fallback for collides() when there is no scope: splicing a
+// block with lexical declarations is unsafe without binding info, since an
+// outer reference to the same name would be captured.
+function hasLexicalDeclarations(node: t.Node): boolean {
+  let found = false;
+  const visit = (n: t.Node, isRoot: boolean): void => {
+    if (found) return;
+    if (!isRoot && (t.isFunction(n) || t.isClass(n))) return;
+    if (
+      (t.isVariableDeclaration(n) && n.kind !== 'var') ||
+      t.isClassDeclaration(n) ||
+      t.isFunctionDeclaration(n)
+    ) {
+      found = true;
+      return;
+    }
+    for (const key of VISITOR_KEYS[n.type] ?? []) {
+      const child = (n as unknown as Record<string, unknown>)[key];
+      if (Array.isArray(child)) {
+        for (const c of child) if (t.isNode(c)) visit(c, false);
+      } else if (t.isNode(child)) {
+        visit(child, false);
+      }
+    }
+  };
+  visit(node, true);
+  return found;
+}
+
+// evaluateTruthy() dereferences path.scope, which is null for nodes
+// created during a noScope traversal (the deobfuscate fixpoint loop).
+// Skip those instead of crashing; same try/catch pattern as
+// constant-folding.
+function safeEvaluateTruthy(test: NodePath): boolean | undefined {
+  try {
+    return test.evaluateTruthy();
+  } catch {
+    return undefined;
   }
 }
 
@@ -171,9 +228,7 @@ function isSideEffectFree(node: t.Node | null | undefined): boolean {
       return keys.every((key) => {
         const child = (node as unknown as Record<string, unknown>)[key];
         if (Array.isArray(child))
-          return child.every(
-            (c) => !t.isNode(c) || isSideEffectFree(c),
-          );
+          return child.every((c) => !t.isNode(c) || isSideEffectFree(c));
         return !t.isNode(child) || isSideEffectFree(child);
       });
     }
