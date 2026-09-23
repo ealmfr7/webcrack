@@ -6,6 +6,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as url from 'node:url';
+import {
+  applyLLMRename,
+  commandSuggestNames,
+  runMultiInput,
+  toWebcrackOptions,
+  type CLIFlags,
+} from './cli-lib.js';
 import { webcrack } from './index.js';
 
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
@@ -15,14 +22,11 @@ const { version, description } = JSON.parse(
 
 debug.enable('webcrack:*');
 
-interface Options {
+interface Options extends CLIFlags {
   force?: boolean;
   output?: string;
-  mangle?: boolean;
-  jsx: boolean;
-  unpack: boolean;
-  deobfuscate: boolean;
-  unminify: boolean;
+  llmRenameCommand?: string;
+  llmTimeout?: number;
 }
 
 async function readStdin() {
@@ -42,10 +46,46 @@ program
   .option('--no-unpack', 'do not extract modules from the bundle')
   .option('--no-deobfuscate', 'do not deobfuscate the code')
   .option('--no-unminify', 'do not unminify the code')
-  .argument('[file]', 'input file, defaults to stdin')
-  .action(async (input: string | undefined) => {
-    const { output, force, ...options } = program.opts<Options>();
-    const code = await (input ? readFile(input, 'utf8') : readStdin());
+  .option('--report', 'collect URLs, endpoints, secrets and other findings')
+  .option('--graph', 'build the module dependency and call graphs')
+  .option('--trace', 'record a per-stage transform trace')
+  .option('--source-map', 'emit a source map of the deobfuscated code')
+  .option(
+    '--rename-heuristics',
+    'rename short or mangled variable names using heuristics',
+  )
+  .option(
+    '--library-mappings',
+    'name modules matching known open-source libraries',
+  )
+  .option(
+    '--llm-rename-command <cmd>',
+    'external command for LLM-based renaming (batch JSON on stdin, {old:new} map on stdout)',
+  )
+  .option(
+    '--llm-timeout <ms>',
+    'timeout in ms for the LLM rename command',
+    (value) => parseInt(value, 10),
+    30000,
+  )
+  .argument('[files...]', 'input files, defaults to stdin')
+  .action(async (files: string[]) => {
+    const {
+      output,
+      force,
+      llmRenameCommand,
+      llmTimeout = 30000,
+      ...flags
+    } = program.opts<Options>();
+    const options = toWebcrackOptions(flags);
+    const suggestNames =
+      llmRenameCommand === undefined
+        ? undefined
+        : commandSuggestNames(llmRenameCommand, llmTimeout);
+
+    if (files.length > 1 && !output) {
+      program.error('multiple input files require the --output option');
+    }
 
     if (output) {
       if (force || !existsSync(output)) {
@@ -55,7 +95,20 @@ program
       }
     }
 
+    if (files.length > 1) {
+      const inputs = await Promise.all(
+        files.map(async (file) => ({
+          name: file,
+          code: await readFile(file, 'utf8'),
+        })),
+      );
+      await runMultiInput(inputs, output!, flags, suggestNames);
+      return;
+    }
+
+    const code = await (files[0] ? readFile(files[0], 'utf8') : readStdin());
     const result = await webcrack(code, options);
+    if (suggestNames) await applyLLMRename(result, suggestNames);
 
     if (output) {
       await result.save(output);
