@@ -1,0 +1,30 @@
+{
+  "type": "browserify",
+  "entryId": "2",
+  "modules": [
+    {
+      "id": "1",
+      "path": "add.js",
+      "isEntry": false,
+      "code": "function add(a, b) {\n  return a + b;\n}\nmodule.exports = add;"
+    },
+    {
+      "id": "2",
+      "path": "index.js",
+      "isEntry": true,
+      "code": "var sum = require(\"./sum\");\nvar numbers = [1, 2, 3];\nvar result = sum(numbers);\nvar outputElement = document.getElementById(\"output\");\noutputElement.innerHTML = result;"
+    },
+    {
+      "id": "3",
+      "path": "reduce.js",
+      "isEntry": false,
+      "code": "function reduce(list, iteratee, memo) {\n  list.forEach(function (item) {\n    memo = iteratee(item, memo);\n  });\n  return memo;\n}\nmodule.exports = reduce;"
+    },
+    {
+      "id": "4",
+      "path": "sum.js",
+      "isEntry": false,
+      "code": "var reduce = require(\"./reduce\");\nvar add = require(\"./add\");\nfunction sum(list) {\n  return reduce(list, add, 0);\n}\nmodule.exports = sum;"
+    }
+  ]
+}

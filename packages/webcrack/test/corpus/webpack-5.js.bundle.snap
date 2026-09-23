@@ -1,0 +1,24 @@
+{
+  "type": "webpack",
+  "entryId": "2",
+  "modules": [
+    {
+      "id": "2",
+      "path": "./index.js",
+      "isEntry": true,
+      "code": "const lib = require(\"./3.js\");\nconsole.log(lib);"
+    },
+    {
+      "id": "3",
+      "path": "./3.js",
+      "isEntry": false,
+      "code": "import * as a from \"./4.js\";\nexport let version = \"2.0.0\";\nexport default a.foo;"
+    },
+    {
+      "id": "4",
+      "path": "./4.js",
+      "isEntry": false,
+      "code": "export const foo = 2;\nexport var obj = {\n  Console: bar\n};\nfunction bar() {}"
+    }
+  ]
+}

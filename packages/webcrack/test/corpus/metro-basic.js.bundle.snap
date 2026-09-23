@@ -1,0 +1,24 @@
+{
+  "type": "metro",
+  "entryId": "0",
+  "modules": [
+    {
+      "id": "0",
+      "path": "./index.js",
+      "isEntry": true,
+      "code": "const add = require(1);\nconst color = require(2);\nmodule.exports = function main() {\n  return add(1, 2) + \" \" + color;\n};"
+    },
+    {
+      "id": "1",
+      "path": "./utils/add.js",
+      "isEntry": false,
+      "code": "module.exports = function add(a, b) {\n  return a + b;\n};"
+    },
+    {
+      "id": "2",
+      "path": "./utils/color.js",
+      "isEntry": false,
+      "code": "const add = require(1);\nmodule.exports = add(40, 2);"
+    }
+  ]
+}
