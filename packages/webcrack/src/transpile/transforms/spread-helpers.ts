@@ -645,8 +645,79 @@ function tryConcatSpread(
   return true;
 }
 
-// `fn.apply(thisArg, _toConsumableArray(args))` -> `fn(...args)`.
-// The `thisArg` is dropped, so it must be side-effect-free.
+// `void <literal>` evaluates to `undefined` without side effects, so it is
+// a safe `thisArg` to drop. Any other `void` operand (`void foo()`,
+// `void foo`) may carry side effects or read a shadowed binding.
+function isVoidLiteral(node: t.Node | null | undefined): boolean {
+  return (
+    t.isUnaryExpression(node, { operator: 'void' }) &&
+    (t.isNumericLiteral(node.argument) ||
+      t.isStringLiteral(node.argument) ||
+      t.isBooleanLiteral(node.argument) ||
+      t.isNullLiteral(node.argument) ||
+      t.isBigIntLiteral(node.argument) ||
+      t.isRegExpLiteral(node.argument) ||
+      (t.isTemplateLiteral(node.argument) &&
+        node.argument.expressions.length === 0))
+  );
+}
+
+// A bare `undefined` is only the global `undefined` value when no local
+// binding shadows it.
+function isUnshadowedUndefined(
+  path: NodePath<t.CallExpression>,
+  node: t.Node | null | undefined,
+): node is t.Identifier {
+  return (
+    t.isIdentifier(node, { name: 'undefined' }) &&
+    !path.scope.getBinding('undefined')
+  );
+}
+
+// Side-effect-free receiver: an identifier, `this`, or a pure member chain
+// (`a.b`, `a["b"]`, `this.x.y`). Anything else (calls, computed lookups
+// with side effects, optionals) reads as impure.
+function isPureReceiver(node: t.Node | null | undefined): boolean {
+  if (t.isIdentifier(node) || t.isThisExpression(node)) return true;
+  if (t.isMemberExpression(node) && !node.optional) {
+    const propOk = node.computed
+      ? t.isStringLiteral(node.property) || t.isNumericLiteral(node.property)
+      : t.isIdentifier(node.property);
+    return propOk && isPureReceiver(node.object);
+  }
+  return false;
+}
+
+// Structural identity ignoring locations. Both sides are pure receivers
+// (checked first), so only identifiers / `this` / member chains can occur.
+function isSameReceiver(a: t.Node, b: t.Node): boolean {
+  if (t.isIdentifier(a) && t.isIdentifier(b)) return a.name === b.name;
+  if (t.isThisExpression(a) && t.isThisExpression(b)) return true;
+  if (t.isMemberExpression(a) && t.isMemberExpression(b)) {
+    if (a.computed !== b.computed) return false;
+    const propSame = a.computed
+      ? (t.isStringLiteral(a.property) &&
+          t.isStringLiteral(b.property) &&
+          a.property.value === b.property.value) ||
+        (t.isNumericLiteral(a.property) &&
+          t.isNumericLiteral(b.property) &&
+          a.property.value === b.property.value)
+      : t.isIdentifier(a.property) &&
+        t.isIdentifier(b.property) &&
+        a.property.name === b.property.name;
+    return !!propSame && isSameReceiver(a.object, b.object);
+  }
+  return false;
+}
+
+// `fn.apply(thisArg, _toConsumableArray(args))` -> `fn(...args)` for bare
+// callees, `obj.m.apply(obj, ...)` -> `obj.m(...args)` for member callees.
+// A bare call binds `this` to `undefined`, so only `undefined`-valued,
+// side-effect-free thisArgs convert (`void <literal>`, unshadowed
+// `undefined`, `null`). A member call binds `this` to the receiver, so the
+// thisArg must be that same side-effect-free receiver. Anything else
+// (`fn.apply(foo, ...)`, `fn.apply(void foo(), ...)`, `o.m.apply(other, ...)`)
+// keeps `.apply`; only the inner helper call still converts.
 function tryApplySpread(
   path: NodePath<t.CallExpression>,
   ctx: Context,
@@ -664,12 +735,24 @@ function tryApplySpread(
   }
   const [inner] = args.arguments;
   if (!isExpression(thisArg) || !isExpression(inner)) return false;
-  const droppable =
-    t.isUnaryExpression(thisArg, { operator: 'void' }) ||
-    t.isIdentifier(thisArg) ||
-    t.isThisExpression(thisArg) ||
-    t.isNullLiteral(thisArg);
-  if (!droppable) return false;
+  if (t.isIdentifier(object)) {
+    const droppable =
+      isVoidLiteral(thisArg) ||
+      isUnshadowedUndefined(path, thisArg) ||
+      t.isNullLiteral(thisArg);
+    if (!droppable) return false;
+  } else if (t.isMemberExpression(object) && !object.optional) {
+    const receiver = object.object;
+    if (
+      !isExpression(receiver) ||
+      !isPureReceiver(receiver) ||
+      !isSameReceiver(receiver, thisArg)
+    ) {
+      return false;
+    }
+  } else {
+    return false;
+  }
   path.replaceWith(t.callExpression(object, [t.spreadElement(inner)]));
   return true;
 }

@@ -153,6 +153,72 @@ describe('array spread (_toConsumableArray)', () => {
     `).toMatchInlineSnapshot(`
       fn.apply(getThis(), [...args]);
     `));
+
+  test('apply with undefined thisArg', () =>
+    expectJS(`
+      ${toConsumableArray}
+      fn.apply(undefined, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`fn(...args);`));
+
+  test('apply with null thisArg', () =>
+    expectJS(`
+      ${toConsumableArray}
+      fn.apply(null, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`fn(...args);`));
+
+  test('apply with identifier thisArg keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      fn.apply(foo, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`fn.apply(foo, [...args]);`));
+
+  test('apply with void call thisArg keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      fn.apply(void foo(), _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`fn.apply(void foo(), [...args]);`));
+
+  test('apply with void identifier thisArg keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      fn.apply(void foo, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`fn.apply(void foo, [...args]);`));
+
+  test('shadowed undefined keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      function f(undefined) {
+        fn.apply(undefined, _toConsumableArray(args));
+      }
+    `).toMatchInlineSnapshot(`
+      function f(undefined) {
+        fn.apply(undefined, [...args]);
+      }
+    `));
+
+  test('member apply with member-chain receiver', () =>
+    expectJS(`
+      ${toConsumableArray}
+      a.b.m.apply(a.b, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`a.b.m(...args);`));
+
+  test('member apply on this', () =>
+    expectJS(`
+      ${toConsumableArray}
+      this.m.apply(this, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`this.m(...args);`));
+
+  test('member apply with different receiver keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      o.m.apply(other, _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`o.m.apply(other, [...args]);`));
+
+  test('member apply with call receiver keeps .apply', () =>
+    expectJS(`
+      ${toConsumableArray}
+      foo().m.apply(foo(), _toConsumableArray(args));
+    `).toMatchInlineSnapshot(`foo().m.apply(foo(), [...args]);`));
 });
 
 describe('object spread', () => {
