@@ -1,5 +1,7 @@
-import { test } from 'vitest';
+import { parse } from '@babel/parser';
+import { expect, test } from 'vitest';
 import { testTransform } from '../../../test';
+import { applyTransforms, generate } from '../../ast-utils';
 import opaquePredicates from '../opaque-predicates';
 
 const expectJS = testTransform(opaquePredicates);
@@ -267,3 +269,49 @@ test('if as loop body with var in dropped branch keeps the var', () =>
       a();
     }
   `));
+
+// The deobfuscate fixpoint loop runs passes with { noScope: true }, where
+// paths for nodes created during the traversal have null scope and
+// evaluateTruthy() crashes. The transform must skip those instead.
+function expectNoScopeJS(input: string) {
+  const ast = parse(input, {
+    sourceType: 'unambiguous',
+    allowReturnOutsideFunction: true,
+  });
+  let changes = -1;
+  expect(() => {
+    changes = applyTransforms(ast, [opaquePredicates], {
+      noScope: true,
+      log: false,
+    }).changes;
+  }).not.toThrow();
+  return { changes, code: generate(ast).trim() };
+}
+
+test('noScope: skips if/else without crashing', () => {
+  const result = expectNoScopeJS(`
+    if (x > 3) {
+      console.log("foo");
+    } else {
+      console.log("bar");
+    }
+  `);
+  expect(result.changes).toBe(0);
+  expect(result.code).toBe(`if (x > 3) {
+  console.log("foo");
+} else {
+  console.log("bar");
+}`);
+});
+
+test('noScope: skips while without crashing', () => {
+  const result = expectNoScopeJS(`
+    while (x) {
+      break;
+    }
+  `);
+  expect(result.changes).toBe(0);
+  expect(result.code).toBe(`while (x) {
+  break;
+}`);
+});
