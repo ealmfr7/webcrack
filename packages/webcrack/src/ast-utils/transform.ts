@@ -1,6 +1,8 @@
 import type { Node, TraverseOptions, Visitor } from '@babel/traverse';
 import traverse, { visitors } from '@babel/traverse';
 import debug from 'debug';
+import { diffLines, getTracer } from '../trace';
+import { generate } from './generator';
 
 const logger = debug('webcrack:transforms');
 
@@ -11,12 +13,22 @@ export async function applyTransformAsync<TOptions>(
 ): Promise<TransformState> {
   logger(`${transform.name}: started`);
   const state: TransformState = { changes: 0 };
+  const tracer = getTracer();
+  // generate() is only called when a tracer is active (zero overhead otherwise)
+  const before = tracer === null ? undefined : generate(ast);
 
   await transform.run?.(ast, state, options);
   if (transform.visitor)
     traverse(ast, transform.visitor(options), undefined, state);
 
   logger(`${transform.name}: finished with ${state.changes} changes`);
+  if (tracer !== null && before !== undefined) {
+    tracer({
+      name: transform.name,
+      changes: state.changes,
+      diff: diffLines(before, generate(ast)),
+    });
+  }
   return state;
 }
 
@@ -27,6 +39,9 @@ export function applyTransform<TOptions>(
 ): TransformState {
   logger(`${transform.name}: started`);
   const state: TransformState = { changes: 0 };
+  const tracer = getTracer();
+  // generate() is only called when a tracer is active (zero overhead otherwise)
+  const before = tracer === null ? undefined : generate(ast);
   transform.run?.(ast, state, options);
 
   if (transform.visitor) {
@@ -38,6 +53,13 @@ export function applyTransform<TOptions>(
   }
 
   logger(`${transform.name}: finished with ${state.changes} changes`);
+  if (tracer !== null && before !== undefined) {
+    tracer({
+      name: transform.name,
+      changes: state.changes,
+      diff: diffLines(before, generate(ast)),
+    });
+  }
   return state;
 }
 
@@ -50,6 +72,11 @@ export function applyTransforms(
   const name = options.name ?? transforms.map((t) => t.name).join(', ');
   if (options.log) logger(`${name}: started`);
   const state: TransformState = { changes: 0 };
+  const tracer = getTracer();
+  // generate() is only called when a tracer is active (zero overhead otherwise).
+  // Visitors are merged into a single traversal, so one entry is recorded
+  // per merged batch under the batch name.
+  const before = tracer === null ? undefined : generate(ast);
 
   for (const transform of transforms) {
     transform.run?.(ast, state);
@@ -64,6 +91,13 @@ export function applyTransforms(
   }
 
   if (options.log) logger(`${name}: finished with ${state.changes} changes`);
+  if (tracer !== null && before !== undefined) {
+    tracer({
+      name,
+      changes: state.changes,
+      diff: diffLines(before, generate(ast)),
+    });
+  }
   return state;
 }
 
