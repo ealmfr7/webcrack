@@ -1,5 +1,6 @@
 import type { NodePath } from '@babel/traverse';
-import type * as t from '@babel/types';
+import * as t from '@babel/types';
+import { VISITOR_KEYS } from '@babel/types';
 import * as m from '@codemod/matchers';
 import type { Transform } from '../ast-utils';
 import {
@@ -114,9 +115,70 @@ export default {
 
     const emptyIife = iife([], m.blockStatement([]));
 
+    // Accepts the controller shape with leading bare declarations (no
+    // initializers) anywhere inside it, left behind when cleanup passes
+    // hoist `var`s out of removed dead branches (at the IIFE top level,
+    // but also nested inside the returned functions). Runs the shared
+    // matcher on a clone with those stripped, so its captures are
+    // populated the same way. Removing the original along with the bare
+    // declarations is sound: they are scoped inside the removed IIFE, so
+    // no outside code can reference them.
+    function matchRelaxedController(
+      path: NodePath<t.VariableDeclarator>,
+    ): boolean {
+      const init = path.node.init;
+      if (
+        !t.isCallExpression(init) ||
+        init.arguments.length > 0 ||
+        !t.isFunctionExpression(init.callee) ||
+        init.callee.params.length > 0
+      ) {
+        return false;
+      }
+      const stripped = t.cloneNode(path.node);
+      if (!stripLeadingBareVarsDeep(stripped)) return false;
+      return matcher.match(stripped);
+    }
+
+    // Removes leading initializer-less declarations from every block in
+    // the subtree. Returns whether anything was removed.
+    function stripLeadingBareVarsDeep(node: t.Node): boolean {
+      let removed = false;
+      const visit = (n: t.Node): void => {
+        if (t.isBlockStatement(n)) {
+          while (
+            n.body.length > 0 &&
+            t.isVariableDeclaration(n.body[0]) &&
+            n.body[0].declarations.length > 0 &&
+            n.body[0].declarations.every((d) => d.init == null)
+          ) {
+            n.body.shift();
+            removed = true;
+          }
+        }
+        for (const key of VISITOR_KEYS[n.type] ?? []) {
+          const child = (n as unknown as Record<string, unknown>)[key];
+          if (Array.isArray(child)) {
+            for (const c of child) if (t.isNode(c)) visit(c);
+          } else if (t.isNode(child)) {
+            visit(child);
+          }
+        }
+      };
+      visit(node);
+      return removed;
+    }
+
     return {
       VariableDeclarator(path) {
-        if (!matcher.match(path.node)) return;
+        // Cleanup passes may hoist `var` declarations out of a removed dead
+        // branch into the controller body (leading `var a;` statements
+        // without initializers), breaking the exact-shape match below.
+        // Accept that shape: the bare declarations are scoped inside the
+        // removed IIFE, so dropping them with it is sound.
+        if (!matcher.match(path.node) && !matchRelaxedController(path)) {
+          return;
+        }
         const binding = path.scope.getBinding(callController.current!);
         if (!binding) return;
         // const callControllerFunctionName = (function() { ... })();
