@@ -12,6 +12,10 @@ import {
   generate,
 } from './ast-utils';
 import { removeNodeFields } from './ast-utils/remove-node-fields.js';
+import { callGraph, moduleGraph, toDot, toJSON } from './analysis/graph.js';
+import type { Graph } from './analysis/graph.js';
+import { extractReport } from './analysis/report.js';
+import type { Report } from './analysis/report.js';
 import type { Sandbox } from './deobfuscate';
 import deobfuscate, {
   createBrowserSandbox,
@@ -44,6 +48,8 @@ import { isBrowser } from './utils/platform';
 
 export { type Sandbox } from './deobfuscate';
 export type { Plugin } from './plugin';
+export type { Graph } from './analysis/graph.js';
+export type { Report } from './analysis/report.js';
 
 type Matchers = typeof m;
 
@@ -51,7 +57,26 @@ export interface WebcrackResult {
   code: string;
   bundle: Bundle | undefined;
   /**
+   * Collected URLs, network endpoints, secrets, regexes and other
+   * interesting strings with original source positions.
+   * Only present when the `report` option is enabled.
+   */
+  report?: Report;
+  /**
+   * Dependency graph of the unpacked bundle.
+   * Only present when the `graph` option is enabled and a bundle was found.
+   */
+  moduleGraph?: Graph;
+  /**
+   * Static call graph of the deobfuscated code.
+   * Only present when the `graph` option is enabled.
+   */
+  callGraph?: Graph;
+  /**
    * Save the deobfuscated code and the extracted bundle to the given directory.
+   * Also writes `report.json` when the `report` option is enabled and
+   * `graph.modules.json`/`.dot` (only when a bundle exists) plus
+   * `graph.calls.json`/`.dot` when the `graph` option is enabled.
    * @param path Output directory
    */
   save(path: string): Promise<void>;
@@ -90,6 +115,18 @@ export interface Options {
    */
   renameHeuristics?: boolean;
   /**
+   * Collect URLs, network endpoints, secrets, regexes and other
+   * interesting strings with original source positions.
+   * @default false
+   */
+  report?: boolean;
+  /**
+   * Build the module dependency graph (when a bundle exists) and the
+   * static call graph of the deobfuscated code.
+   * @default false
+   */
+  graph?: boolean;
+  /**
    * Run AST transformations after specific stages
    */
   plugins?: Partial<Record<Stage, Plugin[]>>;
@@ -123,6 +160,8 @@ function mergeOptions(options: Options): asserts options is Required<Options> {
     deobfuscate: true,
     mangle: false,
     renameHeuristics: false,
+    report: false,
+    graph: false,
     plugins: options.plugins ?? {},
     mappings: () => ({}),
     onProgress: () => {},
@@ -155,6 +194,9 @@ export async function webcrack(
   let ast: ParseResult<t.File> = null!;
   let outputCode = '';
   let bundle: Bundle | undefined;
+  let report: Report | undefined;
+  let moduleGraphResult: Graph | undefined;
+  let callGraphResult: Graph | undefined;
 
   const { plugins } = options;
   const state: PluginState = { opts: {} };
@@ -171,6 +213,9 @@ export async function webcrack(
         debug('webcrack:parse')('Recovered from parse errors', ast.errors);
       }
     },
+    // The report needs original source positions, so it runs on the fresh
+    // parse before removeNodeFields strips `loc`.
+    options.report && (() => (report = extractReport(ast))),
     plugins.afterParse && (() => runPlugins(ast, plugins.afterParse!, state)),
 
     () => {
@@ -225,6 +270,12 @@ export async function webcrack(
     // so the code has to be generated before
     options.unpack && (() => (bundle = unpackAST(ast, options.mappings(m)))),
     plugins.afterUnpack && (() => runPlugins(ast, plugins.afterUnpack!, state)),
+    // Graphs don't use `loc`, so they run on the final AST after unpacking.
+    options.graph &&
+      (() => {
+        if (bundle !== undefined) moduleGraphResult = moduleGraph(bundle);
+        callGraphResult = callGraph(ast);
+      }),
   ].filter(Boolean) as (() => unknown)[];
 
   for (let i = 0; i < stages.length; i++) {
@@ -235,12 +286,46 @@ export async function webcrack(
   return {
     code: outputCode,
     bundle,
+    report,
+    moduleGraph: moduleGraphResult,
+    callGraph: callGraphResult,
     async save(path) {
       const { mkdir, writeFile } = await import('node:fs/promises');
       path = normalize(path);
       await mkdir(path, { recursive: true });
       await writeFile(join(path, 'deobfuscated.js'), outputCode, 'utf8');
       await bundle?.save(path);
+      if (report !== undefined) {
+        await writeFile(
+          join(path, 'report.json'),
+          `${JSON.stringify(report, null, 2)}\n`,
+          'utf8',
+        );
+      }
+      if (moduleGraphResult !== undefined) {
+        await writeFile(
+          join(path, 'graph.modules.json'),
+          toJSON(moduleGraphResult),
+          'utf8',
+        );
+        await writeFile(
+          join(path, 'graph.modules.dot'),
+          toDot(moduleGraphResult, 'modules'),
+          'utf8',
+        );
+      }
+      if (callGraphResult !== undefined) {
+        await writeFile(
+          join(path, 'graph.calls.json'),
+          toJSON(callGraphResult),
+          'utf8',
+        );
+        await writeFile(
+          join(path, 'graph.calls.dot'),
+          toDot(callGraphResult, 'calls'),
+          'utf8',
+        );
+      }
     },
   };
 }
