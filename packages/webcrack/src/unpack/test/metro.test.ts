@@ -8,8 +8,7 @@ import { unpackMetro } from '../metro';
 
 const FIXTURES_DIR = join(__dirname, 'metro');
 
-async function unpackFixture(name: string): Promise<Bundle> {
-  const code = await readFile(join(FIXTURES_DIR, name), 'utf8');
+function unpackCode(code: string): Bundle | undefined {
   const ast = parse(code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
@@ -17,8 +16,14 @@ async function unpackFixture(name: string): Promise<Bundle> {
   });
   const options: { bundle: Bundle | undefined } = { bundle: undefined };
   applyTransform(ast, unpackMetro, options);
-  expect(options.bundle).toBeDefined();
-  return options.bundle!;
+  return options.bundle;
+}
+
+async function unpackFixture(name: string): Promise<Bundle> {
+  const code = await readFile(join(FIXTURES_DIR, name), 'utf8');
+  const bundle = unpackCode(code);
+  expect(bundle).toBeDefined();
+  return bundle!;
 }
 
 function snapshotOf(bundle: Bundle) {
@@ -81,4 +86,51 @@ test('metro 5/6-param factories', async () => {
   expect(leafCode).toContain('exports.default');
 
   expect(snapshotOf(bundle)).toMatchSnapshot();
+});
+
+test('metro 7-param minified: importDefault/importAll are not require', async () => {
+  const bundle = await unpackFixture('metro-min.js');
+
+  expect(bundle.entryId).toBe('0');
+  expect([...bundle.modules.keys()]).toEqual(['0', '5', '6', '7']);
+
+  const code = bundle.modules.get('0')!.code;
+  expect(code).toContain('importDefault(5)');
+  expect(code).toContain('require(6)');
+  expect(code).toContain('importAll(7)');
+  // The importDefault call must not be rewritten to require(5)
+  expect(code).not.toContain('require(5)');
+  expect(code).not.toContain('d[');
+  expect(code).not.toContain('_dependencyMap');
+  // Dev-bundle verbose name 2nd arg is dropped by the rewrite
+  expect(code).not.toContain('"six"');
+  expect(code).toContain('module.exports');
+
+  expect(snapshotOf(bundle)).toMatchSnapshot();
+});
+
+test('metro ignores a locally declared __d', () => {
+  const bundle = unpackCode(
+    'function __d(f, n) { return f(); }\n' +
+      '__d(function (global, require, module, exports, dependencyMap) {\n' +
+      '  module.exports = 1;\n' +
+      '}, 0, []);',
+  );
+  expect(bundle).toBeUndefined();
+});
+
+test('metro ignores non-metro __d shapes', () => {
+  // 0-param factory, no deps array
+  expect(unpackCode('__d(function () { console.log(1); }, 1);')).toBeUndefined();
+  // 2-param factory even with a deps array
+  expect(
+    unpackCode('__d(function (a, b) { return a(b[0]); }, 2, [3]);'),
+  ).toBeUndefined();
+  // Locally assigned __d
+  expect(
+    unpackCode(
+      'var __d = function (f, x) {};\n' +
+        '__d(function (a, b) { return a(b[0]); }, 2, [3]);',
+    ),
+  ).toBeUndefined();
 });
