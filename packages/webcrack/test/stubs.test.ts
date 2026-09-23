@@ -8,13 +8,12 @@ import slicedToArray from '../src/transpile/transforms/sliced-to-array';
 import spreadHelpers from '../src/transpile/transforms/spread-helpers';
 import tsEnum from '../src/transpile/transforms/ts-enum';
 import type { Bundle } from '../src/unpack/bundle';
-import { unpackParcel } from '../src/unpack/parcel';
 import { unpackRollup } from '../src/unpack/rollup';
 
 // Stub unpackers expose a .visitor(options) returning an empty visitor
-// (unpackRollup was implemented in task 3.1 and unpackTurbopack in task 3.3;
-// both are covered by their own test files instead)
-const stubUnpackers = [unpackParcel];
+// (unpackParcel, unpackRollup and unpackTurbopack were implemented in tasks
+// 3.2, 3.1 and 3.3; they are covered by their own test files instead)
+const stubUnpackers: never[] = [];
 // Stub transforms are no-op Transform objects
 const transforms = [spreadHelpers, slicedToArray, tsEnum, packer, evalUnwrap];
 

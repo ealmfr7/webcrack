@@ -1,0 +1,108 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parcel 1: modules, dep map paths and entry id 1`] = `
+{
+  "entryId": "entry1",
+  "modules": [
+    {
+      "code": "var add = require("./utils/add.js");
+var color = require("./utils/color.js");
+module.exports = function main() {
+  return add(1, 2) + ' ' + color;
+};",
+      "id": "entry1",
+      "isEntry": true,
+      "path": "index.js",
+    },
+    {
+      "code": "module.exports = function add(a, b) {
+  return a + b;
+};",
+      "id": "dep1",
+      "isEntry": false,
+      "path": "utils/add.js",
+    },
+    {
+      "code": "var add = require("./add.js");
+module.exports = add(40, 2);",
+      "id": "dep2",
+      "isEntry": false,
+      "path": "utils/color.js",
+    },
+  ],
+  "type": "parcel",
+}
+`;
+
+exports[`parcel 2 minified: short params renamed, helpers ignored 1`] = `
+{
+  "entryId": "c3",
+  "modules": [
+    {
+      "code": "$parcel$defineInteropFlag(exports), $parcel$export(exports, "default", function () {
+  return o;
+});
+function o(e, n) {
+  return e + n;
+}",
+      "id": "a1",
+      "isEntry": false,
+      "path": "./a1.js",
+    },
+    {
+      "code": "exports.color = "#FBC02D";",
+      "id": "b2",
+      "isEntry": false,
+      "path": "./b2.js",
+    },
+    {
+      "code": "var o = require("./a1.js"),
+  t = $parcel$interopDefault(require("./b2.js"));
+module.exports = function () {
+  return (0, o.default)(1, 2) + " " + t;
+};",
+      "id": "c3",
+      "isEntry": true,
+      "path": "./index.js",
+    },
+  ],
+  "type": "parcel",
+}
+`;
+
+exports[`parcel 2: module ids, entry id and dep rewriting 1`] = `
+{
+  "entryId": "entry1hash",
+  "modules": [
+    {
+      "code": "var _add = require("./addhash.js");
+var _color = $parcel$interopDefault(require("./colorhash.js"));
+module.exports = function main() {
+  return (0, _add.add)(1, 2) + ' ' + _color;
+};",
+      "id": "entry1hash",
+      "isEntry": true,
+      "path": "./index.js",
+    },
+    {
+      "code": "$parcel$defineInteropFlag(exports);
+$parcel$export(exports, 'add', function () {
+  return add;
+});
+function add(a, b) {
+  return a + b;
+}",
+      "id": "addhash",
+      "isEntry": false,
+      "path": "./addhash.js",
+    },
+    {
+      "code": "module.exports = '#FBC02D';",
+      "id": "colorhash",
+      "isEntry": false,
+      "path": "./colorhash.js",
+    },
+  ],
+  "type": "parcel",
+}
+`;
