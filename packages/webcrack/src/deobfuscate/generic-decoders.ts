@@ -181,13 +181,17 @@ function analyzePurity(
     MemberExpression(path) {
       if (!pure) return;
       // `Math.random()` is non-deterministic, unlike the rest of `Math`.
+      // Computed access (`Math[expr]`) may resolve to `random` at runtime
+      // (`Math[atob("cmFuZG9t")]`, `Math['ran' + 'dom']`), so every
+      // computed access on the global `Math` is rejected.
       const object = path.get('object');
+      if (!object.isIdentifier({ name: 'Math' })) return;
+      if (object.scope.getBinding('Math')) return;
       const property = path.get('property');
       if (
-        object.isIdentifier({ name: 'Math' }) &&
-        !object.scope.getBinding('Math') &&
-        ((property.isIdentifier() && property.node.name === 'random') ||
-          (property.isStringLiteral() && property.node.value === 'random'))
+        path.node.computed ||
+        (property.isIdentifier() && property.node.name === 'random') ||
+        (property.isStringLiteral() && property.node.value === 'random')
       ) {
         pure = false;
       }

@@ -145,6 +145,19 @@ describe('generic decoders', () => {
     await expect(decodeJS(input)).resolves.toContain('decode("YQ==")');
   });
 
+  test('computed access to Math.random is untouched', async () => {
+    const input = `
+      function decode(s) {
+        return Math[atob("cmFuZG9t")]() > 0.5 ? s : atob(s);
+      }
+      console.log(decode("YQ=="));
+      console.log(decode("Yg=="));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('decode("YQ==")');
+    expect(code).toContain('decode("Yg==")');
+  });
+
   test('call with non-literal args leaves the function alone', async () => {
     const input = `
       const decode = (s) => atob(s);
