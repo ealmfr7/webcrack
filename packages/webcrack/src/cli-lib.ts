@@ -232,24 +232,50 @@ export interface MultiInputResult extends UnpackChunksResult {
 }
 
 /**
- * Directory name for one input under the output directory: the file's base
- * name without extension.
+ * Directory names for each input under the output directory: each input's
+ * base file name without extension. The names are unique — the first
+ * occurrence keeps the bare name, later ones get `-2`, `-3`, … — and never
+ * clash with `reserved` (compared with and without extension), so per-input
+ * directories overwrite neither each other nor files saved from a bundle.
  */
-export function perInputDirName(name: string): string {
-  const base = basename(name);
-  const ext = extname(base);
-  return ext ? base.slice(0, -ext.length) : base;
+export function perInputDirNames(
+  names: string[],
+  reserved: Iterable<string> = [],
+): string[] {
+  const blocked = new Set<string>();
+  for (const entry of reserved) {
+    blocked.add(entry);
+    const ext = extname(entry);
+    if (ext) blocked.add(entry.slice(0, -ext.length));
+  }
+  const used = new Set<string>();
+  return names.map((name) => {
+    const base = basename(name);
+    const ext = extname(base);
+    const bare = ext ? base.slice(0, -ext.length) : base;
+    let candidate = bare;
+    let suffix = 2;
+    while (used.has(candidate) || blocked.has(candidate)) {
+      candidate = `${bare}-${suffix}`;
+      suffix += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  });
 }
 
 /**
  * Deobfuscates several chunk files of the same app and merges them into a
  * single bundle. Each input is processed with
- * `webcrack(code, {unpack: false, ...flags})` (sequentially, because traced
- * runs share a module-global tracer), the outputs are merged with
- * {@link unpackChunks} and the merged bundle is saved to `outDir`.
+ * `webcrack(code, {unpack: false, ...flags})` one input at a time, the
+ * outputs are merged with {@link unpackChunks} and the merged bundle is
+ * saved to `outDir`.
  *
  * `--report`/`--graph`/`--trace`/`--source-map` artifacts are written per
- * input under `<outDir>/<basename>/` via each result's `save()`.
+ * input under `<outDir>/<basename>/` via each result's `save()`; the
+ * directory names are unique per input and never clash with files saved
+ * from the merged bundle. LLM renaming runs once per piece of code: on the
+ * merged bundle when one was detected, otherwise per input.
  * Warnings and unresolved specifiers are printed to stderr.
  */
 export async function runMultiInput(
@@ -264,7 +290,6 @@ export async function runMultiInput(
       ...toWebcrackOptions(flags),
       unpack: false,
     });
-    if (suggestNames) await applyLLMRename(result, suggestNames);
     results.push(result);
   }
 
@@ -272,15 +297,31 @@ export async function runMultiInput(
     results.map((result) => result.code),
   );
 
-  if (suggestNames && bundle) {
-    for (const module of bundle.modules.values()) {
-      await renameWithLLM(module.ast, { suggestNames });
-      module.regenerateCode();
+  if (suggestNames) {
+    if (bundle) {
+      for (const module of bundle.modules.values()) {
+        await renameWithLLM(module.ast, { suggestNames });
+        module.regenerateCode();
+      }
+    } else {
+      for (const result of results) {
+        await applyLLMRename(result, suggestNames);
+      }
     }
   }
 
+  const reserved = bundle
+    ? [...bundle.modules.values()].map(
+        (module) => module.path.replace(/^\.\//, '').split('/')[0],
+      )
+    : [];
+  const dirNames = perInputDirNames(
+    inputs.map((input) => input.name),
+    reserved,
+  );
+
   for (let i = 0; i < inputs.length; i++) {
-    await results[i].save(join(outDir, perInputDirName(inputs[i].name)));
+    await results[i].save(join(outDir, dirNames[i]));
   }
 
   if (bundle) {
