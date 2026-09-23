@@ -47,7 +47,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 
 ## Prioridad 6: nombres y legibilidad
 
-- [ ] Renombrado por heurística: `require("x")` → `x`, `event`, índices de `for`, props de React
+- [x] Renombrado por heurística: `require("x")` → `x`, `event`, índices de `for`, props de React
 - [ ] Renombrado opcional con un LLM, aplicado mediante `scope.rename`
 - [ ] Reconocer librerías (lodash, react, crypto-js…) por hash estructural del AST → `mappings` automáticos
 
