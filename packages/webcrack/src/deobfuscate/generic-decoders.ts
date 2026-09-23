@@ -22,6 +22,26 @@ function isTimeoutError(error: unknown): boolean {
   );
 }
 
+// Builtin globals whose *value* must not escape into a local: aliasing one
+// (`const O = Object`, `const M = Math`) bypasses the member allowlist and
+// the `Math.random` check below, because uses through the alias look like
+// ordinary locals. These names are therefore only allowed as the `object`
+// of a member expression (validated by `checkMemberAccess`) or as the
+// callee of a call/new (`String(x)`, `Array(n)`); any other use of the
+// bare global (initializer, argument, return value, assignment RHS, ...)
+// disqualifies the function.
+const BUILTIN_VALUES = new Set([
+  'Math',
+  'Object',
+  'Array',
+  'String',
+  'Number',
+  'Boolean',
+  'RegExp',
+  'BigInt',
+  'JSON',
+]);
+
 // Globals that a pure decoder may reference. Everything else (console,
 // process, Date, ...) makes a function ineligible. Note `Math` is allowlisted
 // but `Math.random` is rejected separately below.
@@ -150,6 +170,30 @@ function isLiteralArg(node: t.Node): boolean {
   );
 }
 
+/**
+ * Whether a bare reference to one of the `BUILTIN_VALUES` globals is in a
+ * position that `checkMemberAccess` (for member objects) or a direct call
+ * validates. Anything else lets the builtin value escape into a local,
+ * argument, or return value, so it disqualifies the function.
+ */
+function isAllowedBuiltinUse(
+  path: NodePath<t.Identifier | t.JSXIdentifier>,
+): boolean {
+  const parent = path.parentPath;
+  if (!parent) return false;
+  if (parent.isMemberExpression() || parent.isOptionalMemberExpression()) {
+    return (parent.node as t.MemberExpression).object === path.node;
+  }
+  if (
+    parent.isCallExpression() ||
+    parent.isOptionalCallExpression() ||
+    parent.isNewExpression()
+  ) {
+    return (parent.node as t.CallExpression).callee === path.node;
+  }
+  return false;
+}
+
 function isPrimitiveResult(value: unknown): boolean {
   return (
     value === null ||
@@ -231,6 +275,8 @@ function analyzePurity(
       const binding = path.scope.getBinding(name);
       if (!binding) {
         if (!PURE_GLOBALS.has(name)) pure = false;
+        else if (BUILTIN_VALUES.has(name) && !isAllowedBuiltinUse(path))
+          pure = false;
         return;
       }
       if (isLocalBinding(binding, fnScope)) return;

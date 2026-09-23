@@ -243,6 +243,61 @@ describe('generic decoders', () => {
     expect(code).toContain('f(2)');
   });
 
+  test('aliased Object over shared prototype is kept', async () => {
+    const input = `
+      function h(s) {
+        const O = Object;
+        return O.keys(O.prototype).length + s;
+      }
+      Object.prototype.q = 1;
+      console.log(h(1), h(2));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('h(1)');
+    expect(code).toContain('h(2)');
+  });
+
+  test('aliased Math.random is kept', async () => {
+    const input = `
+      function h(s) {
+        const M = Math;
+        return M.random() + s;
+      }
+      console.log(h(1), h(2));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('h(1)');
+    expect(code).toContain('h(2)');
+  });
+
+  test('builtin passed as a value is kept', async () => {
+    const input = `
+      function k(s) {
+        return String(Object) + s;
+      }
+      console.log(k("a"));
+      console.log(k("b"));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('k("a")');
+    expect(code).toContain('k("b")');
+  });
+
+  test('direct builtin calls stay pure', async () => {
+    await expect(
+      decodeJS(`
+        function f(a) {
+          return String(a);
+        }
+        console.log(f(1));
+        console.log(f(2));
+      `),
+    ).resolves.toMatchInlineSnapshot(`
+      "console.log("1");
+      console.log("2");"
+    `);
+  });
+
   test('computed access on builtins is kept', async () => {
     const input = `
       function g(s) {
