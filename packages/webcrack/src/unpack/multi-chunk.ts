@@ -39,7 +39,7 @@ export interface UnpackChunksResult {
  * mapping is never reported as already used by another chunk.
  */
 export function unpackChunks(
-  inputs: string[] | t.File[],
+  inputs: (string | t.File)[],
   mappings: Record<string, m.Matcher<unknown>> = {},
 ): UnpackChunksResult {
   const warnings: string[] = [];
@@ -215,7 +215,10 @@ function relink(bundle: Bundle): string[] {
           takeMissingComment(first);
         } else if (takeMissingComment(first)) {
           unresolved.add(first.value);
-        } else if (isDynamicImport && first.value.startsWith('.')) {
+        } else if (
+          (isRequire || isDynamicImport) &&
+          first.value.startsWith('.')
+        ) {
           unresolved.add(first.value);
         }
       },

@@ -134,6 +134,38 @@ test('no recognizable input yields no bundle', async () => {
   expect(warnings).toHaveLength(1);
 });
 
+test('accepts mixed string and File inputs', async () => {
+  const runtime = await readFixture('webpack-runtime.js');
+  const chunkFile = parse(await readFixture('webpack-chunk-a.js'), {
+    sourceType: 'unambiguous',
+    allowReturnOutsideFunction: true,
+    plugins: ['jsx'],
+  });
+  const { bundle } = unpackChunks([runtime, chunkFile]);
+  expect(bundle).toBeDefined();
+  expect([...bundle!.modules.keys()].sort()).toEqual(['1', '10', '2']);
+});
+
+test('plain require of a missing relative path is unresolved', () => {
+  // Rollup chunks pass require() calls through with no webcrack:missing
+  // marker, so only the relink fallback can report them.
+  const entry = `import './chunk-vendor.a1b2c3.js';
+
+// src/main.js
+const missing = require("./plain-missing.js");
+console.log(missing);
+
+export { missing };
+`;
+  const shared = `// src/shared.js
+export const shared = 1;
+`;
+  const { bundle, unresolved } = unpackChunks([entry, shared]);
+  expect(bundle).toBeDefined();
+  expect(bundle!.type).toBe('rollup');
+  expect(unresolved).toContain('./plain-missing.js');
+});
+
 test('accepts parsed File inputs', async () => {
   const files = await Promise.all(
     ['webpack-runtime.js', 'webpack-chunk-a.js'].map(async (name) =>

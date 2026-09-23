@@ -157,10 +157,11 @@ export async function renameWithLLM(
   ast: Node,
   options: RenameLLMOptions,
 ): Promise<RenameLogEntry[]> {
-  const batchSize = Math.max(
-    1,
-    Math.floor(options.batchSize ?? DEFAULT_BATCH_SIZE) || DEFAULT_BATCH_SIZE,
-  );
+  const rawBatchSize = options.batchSize;
+  const batchSize =
+    rawBatchSize === undefined || !Number.isFinite(rawBatchSize)
+      ? DEFAULT_BATCH_SIZE
+      : Math.max(1, Math.floor(rawBatchSize));
   const log: RenameLogEntry[] = [];
   const renamed = new Set<Binding>();
 
