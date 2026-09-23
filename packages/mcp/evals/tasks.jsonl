@@ -1,0 +1,1 @@
+{"id":"example-webpack-entry","sample":"webpack-5.js","prompt":"Using the webcrack tools, open packages/webcrack/test/corpus/webpack-5.js and tell me which bundler it uses and how many modules it has.","check":{"type":"regex","value":"webpack"}}

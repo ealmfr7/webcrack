@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "webcrack": {
+      "command": "node",
+      "args": ["packages/mcp/dist/index.js"]
+    }
+  }
+}

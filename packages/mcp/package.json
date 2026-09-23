@@ -1,0 +1,37 @@
+{
+  "name": "@webcrack/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP server that turns webcrack into a reverse-engineering explorer for agents",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "webcrack-mcp": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23 || >=24.0.0 <25 || >=26.0.0 <27"
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "start": "node dist/index.js",
+    "lint": "eslint src test",
+    "lint:fix": "eslint src test --fix",
+    "format:check": "prettier --check \"{src,test}/**/*.ts\"",
+    "format": "prettier --write \"{src,test}/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --no-isolate"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "webcrack": "workspace:*",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@webcrack/eslint-config": "workspace:*",
+    "@webcrack/typescript-config": "workspace:*",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  }
+}
