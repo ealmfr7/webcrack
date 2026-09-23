@@ -16,26 +16,26 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 ## Prioridad 2: desempaquetado (`unpack/`)
 
 - [x] esbuild (`__commonJS`, `__export`, `__toESM`, `__require`)
-- [ ] Vite/Rollup (chunks ESM)
+- [x] Vite/Rollup (chunks ESM)
 - [x] Metro / React Native (`__d(factory, id, deps)`)
-- [ ] Parcel
-- [ ] Turbopack
+- [x] Parcel
+- [x] Turbopack
 - [ ] Cargar varios chunks a la vez y reconstruir el grafo completo de módulos
 
 ## Prioridad 3: transpilación inversa (`transpile/`)
 
 - [x] `_classCallCheck` / `_createClass` / `_inherits` → `class`
 - [x] `__awaiter` / `regeneratorRuntime` / `_asyncToGenerator` → `async/await`
-- [ ] `_toConsumableArray` → spread, `_objectSpread` → `{...obj}`
-- [ ] `_slicedToArray` → desestructuración
-- [ ] Enums de TypeScript → `enum`
+- [x] `_toConsumableArray` → spread, `_objectSpread` → `{...obj}`
+- [x] `_slicedToArray` → desestructuración
+- [x] Enums de TypeScript → `enum`
 
 ## Prioridad 4: otros obfuscadores
 
 - [ ] Decoders de strings genéricos (funciones puras con argumentos literales, evaluadas en el sandbox)
-- [ ] Packer de Dean Edwards (`eval(function(p,a,c,k,e,d){...})`)
+- [x] Packer de Dean Edwards (`eval(function(p,a,c,k,e,d){...})`)
 - [ ] JSFuck, JJEncode, AAEncode
-- [ ] `Function(...)()` / `eval` anidados (desenvolverlos capa por capa)
+- [x] `Function(...)()` / `eval` anidados (desenvolverlos capa por capa)
 - [ ] Patrones de JScrambler
 
 ## Prioridad 5: obfuscación con máquina virtual (JSVMP, anti-bot)
