@@ -202,6 +202,89 @@ describe('generic decoders', () => {
     expect(code).toContain('console.log(wrap(1))');
   });
 
+  test('Object.keys over shared prototype is kept', async () => {
+    const input = `
+      function h(s) {
+        return Object.keys(Object.prototype).length + s;
+      }
+      Object.prototype.q = 1;
+      console.log(h(1), h(2));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('h(1)');
+    expect(code).toContain('h(2)');
+  });
+
+  test('JSON.stringify over shared prototype is kept', async () => {
+    const input = `
+      function r(s) {
+        return JSON.stringify(Array.prototype) + s;
+      }
+      Array.prototype.foo = 1;
+      console.log(r(1), r(2));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('r(1)');
+    expect(code).toContain('r(2)');
+  });
+
+  test('Object.defineProperty side effect is kept', async () => {
+    const input = `
+      function f(a) {
+        Object.defineProperty(Object.prototype, 'zz', { value: a, configurable: true });
+        return a;
+      }
+      f(1);
+      f(2);
+      console.log(({}).zz);
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('f(1)');
+    expect(code).toContain('f(2)');
+  });
+
+  test('computed access on builtins is kept', async () => {
+    const input = `
+      function g(s) {
+        return Object['keys']({}).length + s;
+      }
+      console.log(g(1));
+      console.log(g(2));
+    `;
+    const code = await decodeJS(input);
+    expect(code).toContain('g(1)');
+    expect(code).toContain('g(2)');
+  });
+
+  test('stops evaluating after the first sandbox timeout', async () => {
+    const spy = vi.fn(() =>
+      Promise.reject(new Error('Script execution timed out.')),
+    );
+    const ast = parse(
+      `function a(n) { while (true) {} } function b(n) { while (true) {} }
+       console.log(a(1)); console.log(a(2)); console.log(b(1)); console.log(b(2));`,
+      { sourceType: 'unambiguous' },
+    );
+    await applyTransformAsync(ast, genericDecoders, spy);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(generate(ast)).toContain('a(1)');
+  });
+
+  test('undefined results are inlined as void 0', async () => {
+    await expect(
+      decodeJS(`
+        function f(a) {
+          return undefined;
+        }
+        console.log(f(1));
+        console.log(f(2));
+      `),
+    ).resolves.toMatchInlineSnapshot(`
+      "console.log(void 0);
+      console.log(void 0);"
+    `);
+  });
+
   test('Math and parseInt users are treated as pure', async () => {
     await expect(
       decodeJS(`
