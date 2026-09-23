@@ -5,4 +5,7 @@ export { default as logicalAssignments } from './logical-assignments';
 export { default as nullishCoalescing } from './nullish-coalescing';
 export { default as nullishCoalescingAssignment } from './nullish-coalescing-assignment';
 export { default as optionalChaining } from './optional-chaining';
+export { default as slicedToArray } from './sliced-to-array';
+export { default as spreadHelpers } from './spread-helpers';
+export { default as tsEnum } from './ts-enum';
 export { default as templateLiterals } from './template-literals';
