@@ -42,7 +42,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 
 - [x] Detectar el bucle intérprete (`while` + `switch` sobre un opcode)
 - [x] Etiquetar los handlers de cada opcode
-- [ ] Extraer el bytecode y desensamblarlo
+- [x] Extraer el bytecode y desensamblarlo
 - [ ] Traducir el bytecode de vuelta a JS (*lifter*, experimental)
 
 ## Prioridad 6: nombres y legibilidad
