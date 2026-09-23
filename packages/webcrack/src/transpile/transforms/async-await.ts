@@ -1,5 +1,5 @@
 import * as t from '@babel/types';
-import type { NodePath } from '@babel/traverse';
+import type { NodePath, Scope } from '@babel/traverse';
 import type { Transform } from '../../ast-utils';
 
 // Matches `(0, helper)(...)` interop call shapes
@@ -21,18 +21,88 @@ function isExpression(node: t.Node | null | undefined): node is t.Expression {
 }
 
 // TS: __awaiter(thisArg, _arguments, P, generator)
-// Shape-based: exactly 4 arguments, last one a generator function.
+// A non-default P (e.g. a custom Promise constructor) is silently
+// dropped: the output uses the native Promise via async/await.
+function isAwaiterArg(node: t.CallExpression['arguments'][number]): boolean {
+  // _arguments position: void 0, undefined, `arguments`, or an identifier
+  // (TS emits the outer `arguments` or `void 0` here)
+  return (
+    t.isUnaryExpression(node, { operator: 'void' }) || t.isIdentifier(node)
+  );
+}
+
+function isPromiseArg(node: t.CallExpression['arguments'][number]): boolean {
+  // P position: void 0, undefined, or a constructor identifier
+  return (
+    t.isUnaryExpression(node, { operator: 'void' }) || t.isIdentifier(node)
+  );
+}
+
+// TS __awaiter helper shape: it drives the generator through
+// `return new (P || (P = Promise))(function (resolve, reject) {...})`
+function isAwaiterHelper(fn: t.Node | null | undefined): boolean {
+  if (!t.isFunction(fn)) return false;
+  return containsNode(fn.body, (n) => {
+    if (!t.isReturnStatement(n) || !n.argument) return false;
+    if (!t.isNewExpression(n.argument)) return false;
+    return t.isLogicalExpression(n.argument.callee, { operator: '||' });
+  });
+}
+
+// Babel _asyncToGenerator helper shape: a single-parameter function that
+// returns a function producing `new Promise(...)`
+function isAsyncToGeneratorHelper(fn: t.Node | null | undefined): boolean {
+  if (!t.isFunction(fn) || fn.params.length !== 1) return false;
+  const { body } = fn;
+  return (
+    containsNode(
+      body,
+      (n) => t.isReturnStatement(n) && !!n.argument && t.isFunction(n.argument),
+    ) &&
+    containsNode(
+      body,
+      (n) =>
+        t.isNewExpression(n) && t.isIdentifier(n.callee, { name: 'Promise' }),
+    )
+  );
+}
+
+function resolveHelperFn(scope: Scope, name: string): t.Function | null {
+  const binding = scope.getBinding(name);
+  if (!binding) return null;
+  const path = binding.path;
+  if (path.isFunctionDeclaration() || path.isFunctionExpression()) {
+    return path.node;
+  }
+  if (path.isVariableDeclarator() && t.isFunction(path.node.init)) {
+    return path.node.init;
+  }
+  return null;
+}
+
 function getAwaiterGenerator(
   node: t.CallExpression,
+  scope: Scope,
 ): t.FunctionExpression | t.ArrowFunctionExpression | null {
   if (node.arguments.length !== 4) return null;
   if (node.arguments.some((arg) => t.isSpreadElement(arg))) return null;
-  const generator = node.arguments[3];
+  const [, argsArg, promiseArg, generator] = node.arguments;
+  if (!isAwaiterArg(argsArg) || !isPromiseArg(promiseArg)) return null;
   if (
-    (t.isFunctionExpression(generator) ||
-      t.isArrowFunctionExpression(generator)) &&
-    generator.generator
+    !(
+      t.isFunctionExpression(generator) ||
+      t.isArrowFunctionExpression(generator)
+    ) ||
+    !generator.generator
   ) {
+    return null;
+  }
+  const callee = unwrapSequence(node.callee);
+  if (!t.isIdentifier(callee)) return null;
+  if (/awaiter/i.test(callee.name)) return generator;
+  // Minified helper name: only trust it when the binding resolves to the
+  // __awaiter helper definition shape.
+  if (isAwaiterHelper(resolveHelperFn(scope, callee.name))) {
     return generator;
   }
   return null;
@@ -72,11 +142,19 @@ function unwrapGeneratorLike(
 // _asyncToGenerator(regeneratorRuntime.mark(generator))
 function getAsyncToGeneratorInner(
   node: t.CallExpression,
+  scope: Scope,
 ): t.FunctionExpression | t.ArrowFunctionExpression | null {
   if (node.arguments.length !== 1) return null;
+  if (node.arguments.some((arg) => t.isSpreadElement(arg))) return null;
   const callee = unwrapSequence(node.callee);
-  if (!t.isIdentifier(callee) || !callee.name.includes('asyncToGenerator'))
-    return null;
+  if (!t.isIdentifier(callee)) return null;
+  if (!callee.name.includes('asyncToGenerator')) {
+    // Minified helper name: only trust it when the binding resolves to
+    // the _asyncToGenerator helper definition shape.
+    if (!isAsyncToGeneratorHelper(resolveHelperFn(scope, callee.name))) {
+      return null;
+    }
+  }
   return unwrapGeneratorLike(node.arguments[0]);
 }
 
@@ -267,36 +345,51 @@ function containsNode(node: t.Node, test: (node: t.Node) => boolean): boolean {
 }
 
 // Replace a `.sent` read with `await <pending expression>`.
-// Returns false when there is nothing (valid) to substitute.
-function substituteSent(
+//
+// To preserve evaluation order, the read must come first: it must be the
+// whole statement expression, the whole `=` RHS, the whole variable init,
+// or (for return/abrupt values passed directly) the whole value.
+// Anything else bails out with false, as does a read with no pending await.
+function takeSent(
   root: t.Node,
   pending: PendingAwait | null,
   isSent: SentMatcher,
 ): boolean {
-  let ok = true;
-  const visit = (node: t.Node): void => {
-    if (!ok) return;
-    if (isSent(node)) {
-      if (!pending || pending.consumed) {
-        ok = false;
-        return;
-      }
-      pending.consumed = true;
-      const awaited = t.awaitExpression(t.cloneNode(pending.expression, true));
-      const record = node as unknown as Record<string, unknown>;
-      for (const key of Object.keys(node)) {
-        delete record[key];
-      }
-      Object.assign(node, awaited);
-      return;
+  if (!containsNode(root, (n) => isSent(n))) return true;
+  if (!pending || pending.consumed) return false;
+  let target: t.Node;
+  if (isSent(root)) {
+    target = root;
+  } else if (t.isExpressionStatement(root)) {
+    const expr = root.expression;
+    if (isSent(expr)) {
+      target = expr;
+    } else if (
+      t.isAssignmentExpression(expr, { operator: '=' }) &&
+      isSent(expr.right)
+    ) {
+      target = expr.right;
+    } else {
+      return false;
     }
-    for (const child of childNodes(node)) {
-      if (t.isFunction(child) && !t.isArrowFunctionExpression(child)) continue;
-      visit(child);
+  } else if (t.isVariableDeclaration(root) && root.declarations.length === 1) {
+    const init = root.declarations[0].init;
+    if (init && isSent(init)) {
+      target = init;
+    } else {
+      return false;
     }
-  };
-  visit(root);
-  return ok;
+  } else {
+    return false;
+  }
+  pending.consumed = true;
+  const awaited = t.awaitExpression(t.cloneNode(pending.expression, true));
+  const record = target as unknown as Record<string, unknown>;
+  for (const key of Object.keys(target)) {
+    delete record[key];
+  }
+  Object.assign(target, awaited);
+  return true;
 }
 
 // Linearize a regeneratorRuntime.wrap machine covering only straight-line
@@ -342,6 +435,11 @@ function linearizeWrapMachine(
       pending = null;
     }
 
+    // Evaluation order: the pending await may only be consumed by the
+    // first kept statement of the case (resume targets are bookkeeping).
+    let seenKept = false;
+    const consumable = (): PendingAwait | null => (seenKept ? null : pending);
+
     for (const stmt of consequent.slice(0, -1)) {
       if (
         t.isExpressionStatement(stmt) &&
@@ -356,9 +454,10 @@ function linearizeWrapMachine(
       }
       if (t.isVariableDeclaration(stmt) || t.isExpressionStatement(stmt)) {
         if (containsNode(stmt, isForeignContextUse)) return null;
-        if (!substituteSent(stmt, pending, isSent)) return null;
+        if (!takeSent(stmt, consumable(), isSent)) return null;
         if (mentionsContext(stmt, contextName)) return null;
         output.push(stmt);
+        seenKept = true;
         continue;
       }
       return null;
@@ -381,7 +480,7 @@ function linearizeWrapMachine(
       isExpression(argument.arguments[1])
     ) {
       const value = argument.arguments[1];
-      if (!substituteSent(value, pending, isSent)) return null;
+      if (!takeSent(value, consumable(), isSent)) return null;
       output.push(t.returnStatement(value));
       pending = null;
       continue;
@@ -391,7 +490,9 @@ function linearizeWrapMachine(
     if (isAwaitWrapper(argument)) {
       const [value] = argument.arguments;
       if (!isExpression(value)) return null;
-      if (!substituteSent(value, pending, isSent)) return null;
+      // Yielding the just-received value would need a temp: bail out.
+      if (containsNode(value, (n) => isSent(n))) return null;
+      if (!takeSent(value, consumable(), isSent)) return null;
       sawAwait = true;
       if (isFinal) {
         output.push(t.expressionStatement(t.awaitExpression(value)));
@@ -404,7 +505,7 @@ function linearizeWrapMachine(
     // `return value` in the final case is the return value;
     // anywhere else it would be a sync-generator yield: bail out.
     if (isFinal && isExpression(argument)) {
-      if (!substituteSent(argument, pending, isSent)) return null;
+      if (!takeSent(argument, consumable(), isSent)) return null;
       output.push(t.returnStatement(argument));
       pending = null;
       continue;
@@ -515,9 +616,14 @@ function linearizeGeneratorMachine(
     }
 
     const head = consequent.slice(0, -1);
+    // Evaluation order: the pending yield may only be consumed by the
+    // first statement of the case.
+    let seenKept = false;
+    const consumable = (): PendingAwait | null => (seenKept ? null : pending);
     for (const stmt of head) {
-      if (!substituteSent(stmt, pending, isSent)) return null;
+      if (!takeSent(stmt, consumable(), isSent)) return null;
       if (mentionsContext(stmt, stateName)) return null;
+      seenKept = true;
     }
 
     const { argument } = last;
@@ -531,7 +637,9 @@ function linearizeGeneratorMachine(
     if (kindNode.value === 4) {
       // yield -> held for the next `.sent()` reader, or emitted
       // directly when nothing reads it
-      if (!substituteSent(value, pending, isSent)) return null;
+      // Yielding the just-received value would need a temp: bail out.
+      if (containsNode(value, (n) => isSent(n))) return null;
+      if (!takeSent(value, consumable(), isSent)) return null;
       sawYield = true;
       if (isFinal) {
         output.push(...head, t.expressionStatement(t.awaitExpression(value)));
@@ -542,7 +650,7 @@ function linearizeGeneratorMachine(
       }
     } else if (kindNode.value === 2) {
       // return
-      if (!substituteSent(value, pending, isSent)) return null;
+      if (!takeSent(value, consumable(), isSent)) return null;
       output.push(...head, t.returnStatement(value));
       pending = null;
     } else if (kindNode.value === 7) {
@@ -576,23 +684,24 @@ function buildAsyncBody(
   // state machine.
   const body = generator.body.body;
   const last = body.at(-1);
-  if (t.isReturnStatement(last)) {
+  if (t.isReturnStatement(last) && t.isCallExpression(last.argument)) {
     const prefix = body.slice(0, -1);
     if (prefix.every((stmt) => t.isVariableDeclaration(stmt))) {
-      const wrap = getWrapCall(last.argument);
+      // Linearize on a clone: `.sent` substitution mutates nodes, and a
+      // later case may still bail out, which must leave the input intact.
+      const argClone = t.cloneNode(last.argument, /* deep */ true);
+      const wrap = getWrapCall(argClone);
       if (wrap) {
         const stmts = linearizeWrapMachine(wrap.contextName, wrap.cases);
         return stmts && [...prefix, ...stmts];
       }
-      if (t.isCallExpression(last.argument)) {
-        const machine = getGeneratorMachine(last.argument);
-        if (machine) {
-          const stmts = linearizeGeneratorMachine(
-            machine.stateName,
-            machine.cases,
-          );
-          return stmts && [...prefix, ...stmts];
-        }
+      const machine = getGeneratorMachine(argClone);
+      if (machine) {
+        const stmts = linearizeGeneratorMachine(
+          machine.stateName,
+          machine.cases,
+        );
+        return stmts && [...prefix, ...stmts];
       }
     }
   }
@@ -657,7 +766,26 @@ function canInlineApply(
     // Inlined `arguments` is the outer function's `arguments`
     if (!t.isIdentifier(args, { name: 'arguments' })) return false;
   }
+  // Dropping the `.apply()` call drops thisArg/args evaluation, so both
+  // must be side-effect-free for the inline to be valid.
+  if (!isPureHelperArg(thisArg) || !isPureHelperArg(args)) return false;
   return true;
+}
+
+// thisArg/args positions of the async helpers only ever carry `this`,
+// `void 0`, `undefined`, `arguments`, identifiers, or plain literals.
+function isPureHelperArg(node: t.Expression): boolean {
+  return (
+    t.isThisExpression(node) ||
+    t.isIdentifier(node) ||
+    (t.isUnaryExpression(node, { operator: 'void' }) &&
+      t.isNumericLiteral(node.argument)) ||
+    t.isNullLiteral(node) ||
+    t.isStringLiteral(node) ||
+    t.isNumericLiteral(node) ||
+    t.isBooleanLiteral(node) ||
+    t.isBigIntLiteral(node)
+  );
 }
 
 function childFunctionPath(
@@ -679,7 +807,7 @@ export default {
         exit(path) {
           const { node } = path;
 
-          const awaiterGenerator = getAwaiterGenerator(node);
+          const awaiterGenerator = getAwaiterGenerator(node, path.scope);
           if (awaiterGenerator) {
             const fnPath = childFunctionPath(path, 'arguments.3');
             if (!fnPath) return;
@@ -691,7 +819,10 @@ export default {
                 t.memberExpression(
                   t.functionExpression(
                     null,
-                    [],
+                    // Keep the generator params (TS emits default/rest
+                    // params here); canInlineApply refuses to inline a
+                    // body with params below.
+                    awaiterGenerator.params,
                     t.blockStatement(stmts),
                     false,
                     true,
@@ -705,7 +836,7 @@ export default {
             return;
           }
 
-          const inner = getAsyncToGeneratorInner(node);
+          const inner = getAsyncToGeneratorInner(node, path.scope);
           if (inner) {
             const arg = node.arguments[0];
             const fnPath =
@@ -738,6 +869,24 @@ export default {
             node.kind === 'constructor'
           ) {
             return;
+          }
+          if (
+            (t.isClassMethod(node) || t.isObjectMethod(node)) &&
+            (node.kind === 'get' || node.kind === 'set')
+          ) {
+            // `async get x()` / `async set x()` is invalid syntax
+            return;
+          }
+          if (
+            t.isFunctionDeclaration(node) ||
+            t.isFunctionExpression(node) ||
+            t.isObjectMethod(node) ||
+            t.isClassMethod(node) ||
+            t.isClassPrivateMethod(node)
+          ) {
+            // Collapsing into a generator wrapper would produce
+            // `async function*`, which changes semantics.
+            if (node.generator) return;
           }
 
           let returned: t.Expression;
