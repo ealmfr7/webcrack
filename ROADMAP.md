@@ -7,25 +7,25 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 
 ## Prioridad 1: pipeline de deobfuscación
 
-- [ ] Ejecutar `deadCode`, `controlFlowObject` y `controlFlowSwitch` aunque no haya string array
+- [x] Ejecutar `deadCode`, `controlFlowObject` y `controlFlowSwitch` aunque no haya string array
       (hoy `deobfuscate/index.ts` hace `if (!stringArray) return;` antes de estos pases).
-- [ ] Repetir el pipeline hasta que no haya cambios (`state.changes === 0`), con un límite de iteraciones.
-- [ ] Evaluación parcial y constant folding seguros, sin sandbox (`"a"+"b"`, `0x1f^0x3`, `!![]`).
-- [ ] Eliminar predicados opacos (`if (5 > 3)`, comparaciones de literales).
+- [x] Repetir el pipeline hasta que no haya cambios (`state.changes === 0`), con un límite de iteraciones.
+- [x] Evaluación parcial y constant folding seguros, sin sandbox (`"a"+"b"`, `0x1f^0x3`, `!![]`).
+- [x] Eliminar predicados opacos (`if (5 > 3)`, comparaciones de literales).
 
 ## Prioridad 2: desempaquetado (`unpack/`)
 
-- [ ] esbuild (`__commonJS`, `__export`, `__toESM`, `__require`)
+- [x] esbuild (`__commonJS`, `__export`, `__toESM`, `__require`)
 - [ ] Vite/Rollup (chunks ESM)
-- [ ] Metro / React Native (`__d(factory, id, deps)`)
+- [x] Metro / React Native (`__d(factory, id, deps)`)
 - [ ] Parcel
 - [ ] Turbopack
 - [ ] Cargar varios chunks a la vez y reconstruir el grafo completo de módulos
 
 ## Prioridad 3: transpilación inversa (`transpile/`)
 
-- [ ] `_classCallCheck` / `_createClass` / `_inherits` → `class`
-- [ ] `__awaiter` / `regeneratorRuntime` / `_asyncToGenerator` → `async/await`
+- [x] `_classCallCheck` / `_createClass` / `_inherits` → `class`
+- [x] `__awaiter` / `regeneratorRuntime` / `_asyncToGenerator` → `async/await`
 - [ ] `_toConsumableArray` → spread, `_objectSpread` → `{...obj}`
 - [ ] `_slicedToArray` → desestructuración
 - [ ] Enums de TypeScript → `enum`
@@ -60,7 +60,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 
 ## Robustez
 
-- [ ] Corpus de regresión con muestras reales y su resultado esperado (snapshots)
+- [x] Corpus de regresión con muestras reales y su resultado esperado (snapshots)
 - [ ] Tiempo límite y límite de memoria en el sandbox (`isolated-vm`)
 
 ## Flujo de trabajo

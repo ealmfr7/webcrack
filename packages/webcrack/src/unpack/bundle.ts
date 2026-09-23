@@ -4,12 +4,12 @@ import { dirname, join, normalize, relative } from 'node:path';
 import type { Module } from './module';
 
 export class Bundle {
-  type: 'webpack' | 'browserify';
+  type: 'webpack' | 'browserify' | 'esbuild' | 'metro';
   entryId: string;
   modules: Map<string, Module>;
 
   constructor(
-    type: 'webpack' | 'browserify',
+    type: 'webpack' | 'browserify' | 'esbuild' | 'metro',
     entryId: string,
     modules: Map<string, Module>,
   ) {

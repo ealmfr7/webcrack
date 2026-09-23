@@ -8,9 +8,11 @@ import {
 } from '../ast-utils';
 import mergeStrings from '../unminify/transforms/merge-strings';
 import { findArrayRotator } from './array-rotator';
+import constantFolding from './constant-folding';
 import controlFlowObject from './control-flow-object';
 import controlFlowSwitch from './control-flow-switch';
 import deadCode from './dead-code';
+import opaquePredicates from './opaque-predicates';
 import { findDecoders } from './decoder';
 import inlineDecodedStrings from './inline-decoded-strings';
 import inlineDecoderWrappers from './inline-decoder-wrappers';
@@ -101,7 +103,14 @@ export default {
       state.changes += applyTransform(ast, inlineObjectProps).changes;
       state.changes += applyTransforms(
         ast,
-        [mergeStrings, deadCode, controlFlowObject, controlFlowSwitch],
+        [
+          mergeStrings,
+          constantFolding,
+          opaquePredicates,
+          deadCode,
+          controlFlowObject,
+          controlFlowSwitch,
+        ],
         { noScope: true },
       ).changes;
 

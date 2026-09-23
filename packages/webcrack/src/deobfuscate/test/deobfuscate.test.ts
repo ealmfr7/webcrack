@@ -158,7 +158,9 @@ describe('pipeline fixpoint', () => {
       `const o = {a: 1}; if ('a' === 'b') { console.log(o.b); } console.log(o.a);`,
     );
     expect(code).toBe('console.log(1);');
-    expect(changes).toBe(2);
+    // 3 = constant-folding resolves the branch test + dead-code removal +
+    // object-prop inlining (the folding used to be counted inside dead-code).
+    expect(changes).toBe(3);
   });
 
   test('ignores violations removed by dead code removal', async () => {
@@ -168,7 +170,9 @@ describe('pipeline fixpoint', () => {
       `function f(){ const o = {a: 1}; if ('a' === 'b') { o.a = 2; } return o.a; }`,
     );
     expect(code).toBe('function f() {\n  return 1;\n}');
-    expect(changes).toBe(2);
+    // 3 = constant-folding resolves the branch test + dead-code removal +
+    // object-prop inlining (the folding used to be counted inside dead-code).
+    expect(changes).toBe(3);
   });
 
   test('output is stable when run again', async () => {

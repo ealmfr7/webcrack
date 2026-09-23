@@ -14,11 +14,7 @@ document.write(template({
     "1" => WebpackModule {
       "ast": // style-loader: Adds some css to the DOM by adding a <style> tag
 var dispose = require("./2.js") // The css code:
-(require("./3.js"));
-if (false) {
-  module.hot.accept();
-  module.hot.dispose(dispose);
-},
+(require("./3.js"));,
       "id": "1",
       "isEntry": false,
       "path": "./1.js",

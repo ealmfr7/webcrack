@@ -33,5 +33,5 @@ fixtures or hand-written for this corpus.
 
 ## Updating snapshots
 
-After a intentional change to deobfuscation output, refresh all snapshots
+After an intentional change to deobfuscation output, refresh all snapshots
 with `vitest -u` on the corpus test and review the diff before committing.

@@ -11,12 +11,9 @@
 
       require.r(exports);
       const a = require(4);
-      const obj = {
-        version: "2.0.0"
-      };
       require.d(exports, {
         default: () => a.foo,
-        version: () => obj.version
+        version: () => "2.0.0"
       });
     },
     4: (module, exports) => {
