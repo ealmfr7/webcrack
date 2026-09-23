@@ -17,3 +17,4 @@ export {
   type DisassembledInstruction,
   type Disassembly,
 } from './disasm.js';
+export { liftDisassembly, type LiftResult } from './lift.js';

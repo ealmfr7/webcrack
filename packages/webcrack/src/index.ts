@@ -95,6 +95,14 @@ export {
   type HandlerLabel,
   type HandlerLabelKind,
 } from './vm-analysis/handlers.js';
+export {
+  disassemble,
+  formatDisassembly,
+  type BytecodeInput,
+  type DisassembledInstruction,
+  type Disassembly,
+} from './vm-analysis/disasm.js';
+export { liftDisassembly, type LiftResult } from './vm-analysis/lift.js';
 
 type Matchers = typeof m;
 
