@@ -15,6 +15,7 @@ import deadCode from './dead-code';
 import opaquePredicates from './opaque-predicates';
 import { findDecoders } from './decoder';
 import evalUnwrap from './eval-unwrap';
+import genericDecoders from './generic-decoders';
 import inlineDecodedStrings from './inline-decoded-strings';
 import inlineDecoderWrappers from './inline-decoder-wrappers';
 import inlineObjectProps from './inline-object-props';
@@ -101,6 +102,10 @@ export default {
         state.changes += 2 + decoders.length;
       }
     }
+
+    state.changes += (
+      await applyTransformAsync(ast, genericDecoders, sandbox)
+    ).changes;
 
     // Cheap cleanup passes, repeated until an iteration yields no
     // changes. New passes (constant folding, opaque predicates, ...)

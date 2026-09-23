@@ -39,7 +39,9 @@ describe('options', () => {
       /* isolated-vm or something */ Promise.resolve(code),
     );
     await webcrack(obfuscatedSrc, { sandbox });
-    expect(sandbox).toHaveBeenCalledOnce();
+    // The sandbox serves both the string-array decoders and the generic
+    // pure-function decoders, so it is used more than once.
+    expect(sandbox).toHaveBeenCalled();
   });
 
   test('mangle', async () => {
