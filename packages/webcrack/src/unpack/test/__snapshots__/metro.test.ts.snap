@@ -1,0 +1,103 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`metro 5/6-param factories 1`] = `
+{
+  "entryId": "10",
+  "modules": [
+    {
+      "code": "const value = require(11);
+module.exports = value + 1;",
+      "id": "10",
+      "isEntry": true,
+      "path": "./legacy/entry.js",
+    },
+    {
+      "code": "const base = require(12);
+module.exports = base * 2;",
+      "id": "11",
+      "isEntry": false,
+      "path": "./legacy/double.js",
+    },
+    {
+      "code": "Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = 20;",
+      "id": "12",
+      "isEntry": false,
+      "path": "./legacy/base.js",
+    },
+  ],
+  "type": "metro",
+}
+`;
+
+exports[`metro 7-param minified: importDefault/importAll are not require 1`] = `
+{
+  "entryId": "0",
+  "modules": [
+    {
+      "code": "var x = importDefault(5),
+  y = require(6),
+  z = importAll(7);
+module.exports = x + y + z;",
+      "id": "0",
+      "isEntry": true,
+      "path": "./mini/index.js",
+    },
+    {
+      "code": "module.exports = 5;",
+      "id": "5",
+      "isEntry": false,
+      "path": "./mini/five.js",
+    },
+    {
+      "code": "module.exports = 6;",
+      "id": "6",
+      "isEntry": false,
+      "path": "./mini/six.js",
+    },
+    {
+      "code": "module.exports = 7;",
+      "id": "7",
+      "isEntry": false,
+      "path": "./mini/seven.js",
+    },
+  ],
+  "type": "metro",
+}
+`;
+
+exports[`metro 7-param: module ids, entry id and dep rewriting 1`] = `
+{
+  "entryId": "0",
+  "modules": [
+    {
+      "code": "const add = require(1);
+const color = require(2);
+module.exports = function main() {
+  return add(1, 2) + " " + color;
+};",
+      "id": "0",
+      "isEntry": true,
+      "path": "./index.js",
+    },
+    {
+      "code": "module.exports = function add(a, b) {
+  return a + b;
+};",
+      "id": "1",
+      "isEntry": false,
+      "path": "./utils/add.js",
+    },
+    {
+      "code": "const add = require(1);
+module.exports = add(40, 2);",
+      "id": "2",
+      "isEntry": false,
+      "path": "./utils/color.js",
+    },
+  ],
+  "type": "metro",
+}
+`;
