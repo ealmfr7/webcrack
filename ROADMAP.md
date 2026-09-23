@@ -41,7 +41,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 ## Prioridad 5: obfuscación con máquina virtual (JSVMP, anti-bot)
 
 - [x] Detectar el bucle intérprete (`while` + `switch` sobre un opcode)
-- [ ] Etiquetar los handlers de cada opcode
+- [x] Etiquetar los handlers de cada opcode
 - [ ] Extraer el bytecode y desensamblarlo
 - [ ] Traducir el bytecode de vuelta a JS (*lifter*, experimental)
 
