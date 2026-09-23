@@ -19,19 +19,35 @@ async function importIsolatedVM(): Promise<typeof IsolatedVM> {
   return ivm;
 }
 
-export function createNodeSandbox(): Sandbox {
+export interface NodeSandboxOptions {
+  /** Per-evaluation time limit in milliseconds. @default 10_000 */
+  timeout?: number;
+  /** Isolate heap limit in megabytes. @default 128 */
+  memoryLimit?: number;
+}
+
+export function createNodeSandbox(options: NodeSandboxOptions = {}): Sandbox {
+  const { timeout = 10_000, memoryLimit = 128 } = options;
   return async (code: string) => {
     const { Isolate } = await importIsolatedVM();
-    const isolate = new Isolate();
-    const context = await isolate.createContext();
-    const result = (await context.eval(code, {
-      timeout: 10_000,
-      copy: true,
-      filename: 'file:///obfuscated.js',
-    })) as unknown;
-    context.release();
-    isolate.dispose();
-    return result;
+    const isolate = new Isolate({ memoryLimit });
+    try {
+      const context = await isolate.createContext();
+      try {
+        const result = (await context.eval(code, {
+          timeout,
+          copy: true,
+          filename: 'file:///obfuscated.js',
+        })) as unknown;
+        return result;
+      } finally {
+        // A memory-limit violation disposes the isolate itself; touching it
+        // again (release/dispose) throws and can crash the process.
+        if (!isolate.isDisposed) context.release();
+      }
+    } finally {
+      if (!isolate.isDisposed) isolate.dispose();
+    }
   };
 }
 
