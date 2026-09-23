@@ -52,6 +52,15 @@ describe('encoded-payload fixtures decode end to end', () => {
   });
 });
 
+describe('encoded-payload user constructor is never executed', () => {
+  test('user object .constructor through webcrack() stays unchanged', async () => {
+    const input = `function Greeter(m){return function(){console.log(m)}} const g=Object.create(Greeter.prototype); g.constructor("alert("+"1)")();`;
+    const result = await webcrack(input);
+    expect(result.code).toContain('constructor');
+    expect(result.code).not.toContain('alert(1);');
+  });
+});
+
 describe('encoded-payload transform', () => {
   test('encoded member-constructor payload is evaluated and rewritten', async () => {
     const { sandbox, calls } = recordingSandbox((code) => eval(code));
@@ -142,6 +151,11 @@ describe('encoded-payload negative cases (never evaluated)', () => {
     // Non-constructor member calls and unknown computed properties.
     `[]["filter"]["map"]("alert(1)")()`,
     `var key = "constructor"; [][key]("alert(1)")()`,
+    // User receivers are not payloads, even with a static payload string.
+    `var g = {}; g.constructor("alert(1)")()`,
+    `foo.constructor("alert(1)")()`,
+    `var g = {}; g.constructor("alert(" + "1)")()`,
+    `function Greeter(m){return function(){console.log(m)}} const g=Object.create(Greeter.prototype); g.constructor("alert("+"1)")();`,
     // `new Function(...)` is eval-unwrap's shape, not this transform's.
     `new Function("alert(1);")()`,
   ])('%s is untouched', async (input) => {
