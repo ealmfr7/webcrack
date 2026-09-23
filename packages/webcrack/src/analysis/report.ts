@@ -232,24 +232,43 @@ function objectName(obj: t.MemberExpression['object']): string | null {
   return null;
 }
 
+/** Receivers whose `.fetch(url, ...)` is the global `fetch`. */
+const FETCH_RECEIVERS = new Set(['window', 'globalThis', 'self']);
+
 /**
  * Extract `{ method, url }` from a `fetch`/`axios`/`$.ajax` style call.
  * Non-static parts come back as `null`.
+ *
+ * `isGlobal` reports whether a name resolves to the global scope (no
+ * shadowing binding): bare `fetch(...)` and `window`/`globalThis`/`self`
+ * receivers only count when unshadowed, so `db.fetch(...)` or a local
+ * `fetch` binding is never reported as a network endpoint.
  */
 function endpointFromCall(
   callee: t.Expression | t.V8IntrinsicIdentifier,
   args: (t.Expression | t.SpreadElement | t.ArgumentPlaceholder)[],
+  isGlobal: (name: string) => boolean = () => true,
 ): EndpointEntry | null {
   const arg = (i: number): t.Node | null =>
     i < args.length && !t.isSpreadElement(args[i]) ? (args[i]) : null;
 
   // fetch(url, { method })
   if (t.isIdentifier(callee) && callee.name === 'fetch') {
+    if (!isGlobal('fetch')) return null;
     const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
-  // window.fetch(url, ...) — same shape as fetch
+  // window.fetch(url, ...) — same shape as fetch, other receivers (e.g.
+  // `db.fetch(...)`) are not the global fetch.
   if (isMember(callee) && propName(callee) === 'fetch') {
+    const receiver = callee.object;
+    if (
+      !t.isIdentifier(receiver) ||
+      !FETCH_RECEIVERS.has(receiver.name) ||
+      !isGlobal(receiver.name)
+    ) {
+      return null;
+    }
     const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
@@ -466,6 +485,49 @@ export function extractReport(ast: t.File): Report {
     addInteresting(value, node);
   };
 
+  // Shared by CallExpression and OptionalCallExpression so `f?.(url)` and
+  // `RegExp?.("src")` are handled exactly like their non-optional forms.
+  const scanCall = (
+    callee: t.Expression | t.V8IntrinsicIdentifier,
+    args: (t.Expression | t.SpreadElement | t.ArgumentPlaceholder)[],
+    node: t.Node,
+    isGlobal: (name: string) => boolean,
+  ): void => {
+    const entry = endpointFromCall(callee, args, isGlobal);
+    if (entry) {
+      const at = pos(node);
+      entry.line = at.line;
+      entry.column = at.column;
+      pushUnique(
+        report.endpoints,
+        seenEndpoints,
+        `${entry.method ?? ''}\n${entry.url ?? ''}`,
+        entry,
+      );
+    }
+    // new RegExp("src", "flags") handled under NewExpression; also allow
+    // direct RegExp("src") calls here.
+    if (
+      t.isIdentifier(callee) &&
+      callee.name === 'RegExp' &&
+      args.length > 0 &&
+      !t.isSpreadElement(args[0])
+    ) {
+      const source = staticString(args[0]);
+      const flags =
+        args.length > 1 && !t.isSpreadElement(args[1])
+          ? (staticString(args[1]) ?? '')
+          : '';
+      if (source !== null) {
+        const value = `/${source}/${flags}`;
+        pushUnique(report.regexes, seenRegexes, value, {
+          value,
+          ...pos(node),
+        });
+      }
+    }
+  };
+
   traverse(ast, {
     StringLiteral(path) {
       scanString(path.node.value, path.node);
@@ -485,61 +547,17 @@ export function extractReport(ast: t.File): Report {
       });
     },
     CallExpression(path) {
-      const entry = endpointFromCall(
-        path.node.callee,
-        path.node.arguments,
-      );
-      if (entry) {
-        const at = pos(path.node);
-        entry.line = at.line;
-        entry.column = at.column;
-        pushUnique(
-          report.endpoints,
-          seenEndpoints,
-          `${entry.method ?? ''}\n${entry.url ?? ''}`,
-          entry,
-        );
-      }
-      // new RegExp("src", "flags") handled under NewExpression; also allow
-      // direct RegExp("src") calls here.
-      const callee = path.node.callee;
-      if (
-        t.isIdentifier(callee) &&
-        callee.name === 'RegExp' &&
-        path.node.arguments.length > 0 &&
-        !t.isSpreadElement(path.node.arguments[0])
-      ) {
-        const source = staticString(path.node.arguments[0]);
-        const flags =
-          path.node.arguments.length > 1 &&
-          !t.isSpreadElement(path.node.arguments[1])
-            ? (staticString(path.node.arguments[1]) ?? '')
-            : '';
-        if (source !== null) {
-          const value = `/${source}/${flags}`;
-          pushUnique(report.regexes, seenRegexes, value, {
-            value,
-            ...pos(path.node),
-          });
-        }
-      }
+      // NB: `hasBinding` is wrong here — it returns true for names on
+      // Babel's known-globals list (e.g. `globalThis`). `getBinding`
+      // only finds real bindings, i.e. actual shadowing declarations.
+      const isGlobal = (name: string): boolean =>
+        path.scope.getBinding(name) === undefined;
+      scanCall(path.node.callee, path.node.arguments, path.node, isGlobal);
     },
     OptionalCallExpression(path) {
-      const entry = endpointFromCall(
-        path.node.callee,
-        path.node.arguments,
-      );
-      if (entry) {
-        const at = pos(path.node);
-        entry.line = at.line;
-        entry.column = at.column;
-        pushUnique(
-          report.endpoints,
-          seenEndpoints,
-          `${entry.method ?? ''}\n${entry.url ?? ''}`,
-          entry,
-        );
-      }
+      const isGlobal = (name: string): boolean =>
+        path.scope.getBinding(name) === undefined;
+      scanCall(path.node.callee, path.node.arguments, path.node, isGlobal);
     },
     NewExpression(path) {
       const callee = path.node.callee;
