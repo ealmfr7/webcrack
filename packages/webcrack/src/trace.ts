@@ -18,7 +18,16 @@
  *
  * The line diff ({@link diffLines}) is a small self-contained LCS diff with
  * a bounded fast path for very large inputs. No extra dependencies.
+ *
+ * Tracing is reentrant on Node.js: each `withTrace` scope runs in its own
+ * `AsyncLocalStorage` context, so overlapping or nested async scopes each
+ * collect only their own entries. Where `AsyncLocalStorage` is unavailable
+ * (e.g. browsers) tracing falls back to a single module-global tracer: async
+ * scopes may then observe each other's entries, and nested scopes behave as
+ * before (the inner scope shadows the outer one until it finishes).
  */
+
+import type { AsyncLocalStorage as NodeAsyncLocalStorage } from 'node:async_hooks';
 
 export interface TraceEntry {
   /** Transform name, or the merged-batch name for `applyTransforms`. */
@@ -36,13 +45,62 @@ export type Tracer = (entry: TraceEntry) => void;
 
 let activeTracer: Tracer | null = null;
 
-/** Install a tracer, or pass `null` to disable tracing. */
+type AsyncLocalStorageType = NodeAsyncLocalStorage<Tracer>;
+
+let traceStorage: AsyncLocalStorageType | null | undefined;
+
+/**
+ * Return the `AsyncLocalStorage` instance used to scope tracers, or `null`
+ * when it is unavailable (e.g. browsers).
+ *
+ * The builtin module is loaded through `process.getBuiltinModule` instead of
+ * a static `node:async_hooks` import so browser bundles (which compile this
+ * file from source) never see a Node-only import and build without warnings.
+ */
+function getTraceStorage(): AsyncLocalStorageType | null {
+  if (traceStorage !== undefined) return traceStorage;
+  traceStorage = null;
+  try {
+    const proc = (
+      globalThis as {
+        process?: {
+          versions?: { node?: string };
+          getBuiltinModule?: (id: string) => unknown;
+        };
+      }
+    ).process;
+    if (typeof proc?.getBuiltinModule !== 'function') return traceStorage;
+    const mod = proc.getBuiltinModule('node:async_hooks') as {
+      AsyncLocalStorage?: new () => AsyncLocalStorageType;
+    };
+    if (typeof mod?.AsyncLocalStorage === 'function') {
+      traceStorage = new mod.AsyncLocalStorage();
+    }
+  } catch {
+    traceStorage = null;
+  }
+  return traceStorage;
+}
+
+/**
+ * Install a process-global tracer, or pass `null` to disable tracing.
+ *
+ * Inside a `withTrace` scope the scope's collector takes precedence over the
+ * global tracer; `setTracer` only affects code running outside any scope.
+ */
 export function setTracer(tracer: Tracer | null): void {
   activeTracer = tracer;
 }
 
-/** Return the currently active tracer, or `null` when tracing is off. */
+/**
+ * Return the currently active tracer, or `null` when tracing is off.
+ *
+ * Inside a `withTrace` scope (on platforms with `AsyncLocalStorage`) this is
+ * the scope's collector; otherwise it is the global tracer from `setTracer`.
+ */
 export function getTracer(): Tracer | null {
+  const store = getTraceStorage()?.getStore();
+  if (store !== undefined) return store;
   return activeTracer;
 }
 
@@ -59,10 +117,27 @@ export function withTrace<T>(
   | { result: T; entries: TraceEntry[] }
   | Promise<{ result: Awaited<T>; entries: TraceEntry[] }> {
   const entries: TraceEntry[] = [];
-  const previous = activeTracer;
-  activeTracer = (entry) => {
+  const collector: Tracer = (entry) => {
     entries.push(entry);
   };
+  // Reentrant path: the collector lives in an AsyncLocalStorage context, so
+  // overlapping async scopes each see only their own tracer and no manual
+  // save/restore (which the first scope to finish would clobber) is needed.
+  const storage = getTraceStorage();
+  if (storage !== null) {
+    const result = storage.run(collector, fn);
+    if (result instanceof Promise) {
+      return (result as Promise<unknown>).then((value) => ({
+        result: value as Awaited<T>,
+        entries,
+      }));
+    }
+    return { result, entries };
+  }
+  // Fallback for environments without AsyncLocalStorage (e.g. browsers):
+  // a single module-global tracer, restored when the scope finishes.
+  const previous = activeTracer;
+  activeTracer = collector;
   let result: T | Promise<T>;
   try {
     result = fn();

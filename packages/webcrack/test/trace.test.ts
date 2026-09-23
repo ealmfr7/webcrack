@@ -239,4 +239,80 @@ describe('tracer', () => {
     ).toThrow('boom');
     expect(getTracer()).toBeNull();
   });
+
+  test('tracing off never calls generate for applyTransformAsync', async () => {
+    await applyTransformAsync(parseCode(CODE), asyncRenameFoo);
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  test('overlapping async scopes receive only their own entries', async () => {
+    const makeGate = () => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const enteredPromise = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      return { promise, release, entered, enteredPromise };
+    };
+    const gateA = makeGate();
+    const gateB = makeGate();
+
+    // A starts first but finishes first: with a module-global tracer the
+    // first scope to finish would reset (and steal) the other's tracer.
+    const scopeA = withTrace(async () => {
+      applyTransform(parseCode(CODE), renameFoo);
+      gateA.entered();
+      await gateA.promise;
+      applyTransform(parseCode(CODE), noop);
+      return 'a';
+    });
+    const scopeB = withTrace(async () => {
+      applyTransform(parseCode(CODE), noop);
+      gateB.entered();
+      await gateB.promise;
+      applyTransform(parseCode(CODE), renameFoo);
+      return 'b';
+    });
+
+    await gateA.enteredPromise;
+    await gateB.enteredPromise;
+
+    gateA.release();
+    const resultA = await scopeA;
+    expect(resultA.result).toBe('a');
+    expect(resultA.entries.map((entry) => entry.name)).toEqual([
+      'rename-foo',
+      'noop',
+    ]);
+
+    gateB.release();
+    const resultB = await scopeB;
+    expect(resultB.result).toBe('b');
+    expect(resultB.entries.map((entry) => entry.name)).toEqual([
+      'noop',
+      'rename-foo',
+    ]);
+    expect(getTracer()).toBeNull();
+  });
+
+  test('nested async scopes collect only their own entries', async () => {
+    const outer = await withTrace(async () => {
+      applyTransform(parseCode(CODE), noop);
+      const inner = await withTrace(async () => {
+        applyTransform(parseCode(CODE), renameFoo);
+        await Promise.resolve();
+        return 'inner';
+      });
+      expect(inner.result).toBe('inner');
+      expect(inner.entries.map((entry) => entry.name)).toEqual(['rename-foo']);
+      applyTransform(parseCode(CODE), noop);
+      return 'outer';
+    });
+    expect(outer.result).toBe('outer');
+    expect(outer.entries.map((entry) => entry.name)).toEqual(['noop', 'noop']);
+    expect(getTracer()).toBeNull();
+  });
 });
