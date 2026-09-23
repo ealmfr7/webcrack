@@ -78,14 +78,17 @@ export default {
         const binding = path.scope.getBinding(varId.current!.name);
         if (!binding || !isReadonlyObject(binding, memberAccess)) return;
 
-        inlineObjectProperties(
-          binding,
-          m.objectProperty(
-            propertyKey,
-            m.or(m.stringLiteral(), m.numericLiteral()),
-          ),
-        );
-        this.changes++;
+        if (
+          inlineObjectProperties(
+            binding,
+            m.objectProperty(
+              propertyKey,
+              m.or(m.stringLiteral(), m.numericLiteral()),
+            ),
+          )
+        ) {
+          this.changes++;
+        }
       },
     };
   },
