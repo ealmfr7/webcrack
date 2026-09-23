@@ -18,6 +18,31 @@ exports[`esbuild commonjs with top-level entry > module code snapshots > ./src/d
 };"
 `;
 
+exports[`esbuild iife > module code snapshots > ./index.js 1`] = `
+"// src/entry.js
+var import_dep = __toESM(require("./src/dep.js"));
+var x = (0, import_dep.default)(1, 2);
+console.log(x);"
+`;
+
+exports[`esbuild iife > module code snapshots > ./src/dep.js 1`] = `
+"module.exports = function add2(a, b) {
+  return a + b;
+};"
+`;
+
+exports[`esbuild iife minified > module code snapshots > ./index.js 1`] = `
+"var s = g(require("./module-0.js")),
+  b = (0, s.default)(1, 2);
+console.log(b);"
+`;
+
+exports[`esbuild iife minified > module code snapshots > ./module-0.js 1`] = `
+"c.exports = function (o, t) {
+  return o + t;
+};"
+`;
+
 exports[`esbuild minified > module code snapshots > ./index.js 1`] = `
 "var k = {};
 b(k, {

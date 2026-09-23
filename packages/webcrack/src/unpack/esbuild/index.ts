@@ -1,4 +1,4 @@
-import type { NodePath } from '@babel/traverse';
+import type { NodePath, Scope } from '@babel/traverse';
 import * as t from '@babel/types';
 import { VISITOR_KEYS } from '@babel/types';
 import type { Transform } from '../../ast-utils';
@@ -55,13 +55,87 @@ export const unpackEsbuild = {
   visitor(options) {
     return {
       Program(path) {
-        const { helpers, helperDecls } = discoverHelpers(path);
-        if (unpackCommonJS(path, options, helpers, helperDecls)) return;
-        unpackScopeHoistedESM(path, options, helpers);
+        const block = getScopeBlock(path);
+        const blockNodes = block.statements.map((statement) => statement.node);
+        const { helpers, helperDecls } = discoverHelpers(blockNodes);
+        if (unpackCommonJS(path, block, options, helpers, helperDecls)) return;
+        unpackScopeHoistedESM(path, block, options, helpers);
       },
     };
   },
 } satisfies Transform<{ bundle: Bundle | undefined }>;
+
+interface ScopeBlock {
+  /** Bundle-scope statements (unwrapped from an IIFE when needed) */
+  statements: NodePath<t.Statement>[];
+  /** Scope those statements' `var` bindings live in */
+  scope: Scope;
+}
+
+function isDirective(statement: NodePath<t.Statement>): boolean {
+  return (
+    statement.isExpressionStatement() &&
+    t.isStringLiteral(statement.node.expression)
+  );
+}
+
+/**
+ * Matches a zero-arg IIFE call with a block body: `(() => {...})()`,
+ * `(function () {...})()`, `!function () {}()`.
+ */
+function matchIIFECall(
+  call: NodePath<t.CallExpression>,
+): NodePath<t.ArrowFunctionExpression | t.FunctionExpression> | undefined {
+  if (call.node.arguments.length !== 0) return undefined;
+  let callee = call.get('callee');
+  while (callee.isUnaryExpression()) {
+    const argument = callee.get('argument');
+    if (Array.isArray(argument)) return undefined;
+    callee = argument;
+  }
+  if (!callee.isArrowFunctionExpression() && !callee.isFunctionExpression()) {
+    return undefined;
+  }
+  if (!t.isBlockStatement(callee.node.body)) return undefined;
+  return callee;
+}
+
+/**
+ * Returns the statement list holding the bundle: the program body itself, or
+ * the body of a single IIFE call (`(() => {...})()`,
+ * `var X = (() => {...})()`), skipping a leading directive prologue such as
+ * `"use strict"`.
+ */
+function getScopeBlock(programPath: NodePath<t.Program>): ScopeBlock {
+  const statements = programPath.get('body');
+  let index = 0;
+  while (index < statements.length && isDirective(statements[index])) {
+    index++;
+  }
+  const rest = statements.slice(index);
+  if (rest.length === 1) {
+    const [only] = rest;
+    let call: NodePath<t.CallExpression> | undefined;
+    if (only.isExpressionStatement()) {
+      const expression = only.get('expression');
+      if (expression.isCallExpression()) call = expression;
+    } else if (only.isVariableDeclaration()) {
+      const declarations = only.get('declarations');
+      if (declarations.length === 1) {
+        const init = declarations[0].get('init');
+        if (!Array.isArray(init) && init.isCallExpression()) call = init;
+      }
+    }
+    if (call) {
+      const fn = matchIIFECall(call);
+      if (fn) {
+        const body = fn.get('body') as NodePath<t.BlockStatement>;
+        return { statements: body.get('body'), scope: fn.scope };
+      }
+    }
+  }
+  return { statements, scope: programPath.scope };
+}
 
 type AnyFunction = t.ArrowFunctionExpression | t.FunctionExpression;
 
@@ -317,7 +391,7 @@ function isObjectAlias(init: t.Expression): boolean {
  * declarators that are runtime noise (helper definitions, `Object.*`
  * aliases, other `__`-prefixed vars) rather than bundle content.
  */
-function discoverHelpers(path: NodePath<t.Program>): {
+function discoverHelpers(statements: t.Statement[]): {
   helpers: EsbuildHelpers;
   helperDecls: Set<t.VariableDeclarator>;
 } {
@@ -329,7 +403,7 @@ function discoverHelpers(path: NodePath<t.Program>): {
   };
   const helperDecls = new Set<t.VariableDeclarator>();
 
-  for (const statement of path.node.body) {
+  for (const statement of statements) {
     if (!t.isVariableDeclaration(statement)) continue;
     for (const declarator of statement.declarations) {
       if (!t.isIdentifier(declarator.id) || !declarator.init) continue;
@@ -363,7 +437,7 @@ function discoverHelpers(path: NodePath<t.Program>): {
   }
 
   const commonJSName = helpers.commonJS ?? '__commonJS';
-  for (const statement of path.node.body) {
+  for (const statement of statements) {
     if (!t.isVariableDeclaration(statement)) continue;
     for (const declarator of statement.declarations) {
       if (
@@ -381,6 +455,18 @@ function discoverHelpers(path: NodePath<t.Program>): {
       ) {
         continue;
       }
+      // Only function definitions count as unknown runtime helpers here; a
+      // user's own `var __foo = <value>` entry data must survive. (A user's
+      // `var __foo = function ...` is still treated as runtime noise.)
+      if (
+        !declarator.init ||
+        !(
+          t.isArrowFunctionExpression(declarator.init) ||
+          t.isFunctionExpression(declarator.init)
+        )
+      ) {
+        continue;
+      }
       helperDecls.add(declarator);
     }
   }
@@ -395,13 +481,13 @@ function discoverHelpers(path: NodePath<t.Program>): {
  * (minified output) gets a synthesized id.
  */
 function collectCommonJSModules(
-  path: NodePath<t.Program>,
+  statements: t.Statement[],
   commonJSName: string,
 ): Map<string, CommonJSModule> {
   const requireVars = new Map<string, CommonJSModule>();
   let synthesized = 0;
 
-  for (const statement of path.node.body) {
+  for (const statement of statements) {
     if (!t.isVariableDeclaration(statement)) continue;
     for (const declarator of statement.declarations) {
       if (!t.isIdentifier(declarator.id)) continue;
@@ -476,6 +562,7 @@ function getFunctionBody(
  */
 function rewriteRequires(
   path: NodePath<t.Program>,
+  topScope: Scope,
   requireVars: Map<string, CommonJSModule>,
 ): void {
   path.traverse({
@@ -498,7 +585,7 @@ function rewriteRequires(
       if (callee.node.name === '__require') {
         const binding = callPath.scope.getBinding('__require');
         // Don't touch a user-defined shadowing declaration
-        if (binding && binding.scope !== path.scope) return;
+        if (binding && binding.scope !== topScope) return;
         const [first] = callPath.node.arguments;
         if (callPath.node.arguments.length === 1 && t.isStringLiteral(first)) {
           callee.replaceWith(t.identifier('require'));
@@ -572,12 +659,13 @@ function pickEntryPath(taken: Set<string>): string {
 
 function unpackCommonJS(
   path: NodePath<t.Program>,
+  block: ScopeBlock,
   options: { bundle: Bundle | undefined } | undefined,
   helpers: EsbuildHelpers,
   helperDecls: Set<t.VariableDeclarator>,
 ): boolean {
   const requireVars = collectCommonJSModules(
-    path,
+    block.statements.map((statement) => statement.node),
     helpers.commonJS ?? '__commonJS',
   );
   if (requireVars.size === 0) return false;
@@ -590,7 +678,7 @@ function unpackCommonJS(
   // left is real entry code and becomes a synthetic entry module.
   const content: t.Statement[] = [];
   let invoked: CommonJSModule | undefined;
-  for (const statement of path.get('body')) {
+  for (const statement of block.statements) {
     if (statement.isVariableDeclaration()) {
       const declarations = statement.get('declarations').map((d) => d.node);
       if (
@@ -616,7 +704,7 @@ function unpackCommonJS(
     content.push(statement.node);
   }
 
-  rewriteRequires(path, requireVars);
+  rewriteRequires(path, block.scope, requireVars);
 
   const modules = new Map<string, EsbuildModule>();
   for (const { module } of requireVars.values()) {
@@ -651,6 +739,7 @@ function unpackCommonJS(
  */
 function unpackScopeHoistedESM(
   path: NodePath<t.Program>,
+  block: ScopeBlock,
   options: { bundle: Bundle | undefined } | undefined,
   helpers: EsbuildHelpers,
 ): void {
@@ -707,7 +796,7 @@ function unpackScopeHoistedESM(
 
   const module = new EsbuildModule(
     'index',
-    t.file(t.program([...path.node.body])),
+    t.file(t.program(block.statements.map((statement) => statement.node))),
     true,
   );
   options!.bundle = new EsbuildBundle(

@@ -126,6 +126,105 @@ describe('esbuild wrapper entry invocation', () => {
   });
 });
 
+describe('esbuild iife', async () => {
+  // Real output of `esbuild src/entry.js --bundle` (the default format)
+  const bundle = (await unpackFixture('esbuild-iife.js'))!;
+
+  test('unwraps the iife', () => {
+    expect(bundle).toBeDefined();
+    expect(bundle.type).toBe('esbuild');
+    expect(bundle.modules.size).toBe(2);
+    expect([...bundle.modules.keys()]).toEqual(['./src/dep.js', './index.js']);
+    expect(bundle.entryId).toBe('./index.js');
+  });
+
+  test('entry keeps iife body code with rewritten requires', () => {
+    const entry = bundle.modules.get('./index.js')!.code;
+    expect(entry).toContain('__toESM(require("./src/dep.js"))');
+    expect(entry).not.toContain('require_dep(');
+    expect(entry).not.toContain('__commonJS');
+  });
+
+  test('module code snapshots', () => {
+    for (const module of bundle.modules.values()) {
+      expect(module.code).toMatchSnapshot(module.path);
+    }
+  });
+});
+
+describe('esbuild iife minified', async () => {
+  // Real output of `esbuild src/entry.js --bundle --minify`
+  const bundle = (await unpackFixture('esbuild-iife-min.js'))!;
+
+  test('unwraps the minified iife', () => {
+    expect(bundle).toBeDefined();
+    expect(bundle.modules.size).toBe(2);
+    expect([...bundle.modules.keys()]).toEqual(['./module-0.js', './index.js']);
+    expect(bundle.entryId).toBe('./index.js');
+    expect(bundle.modules.get('./index.js')!.code).toContain(
+      'require("./module-0.js")',
+    );
+  });
+
+  test('module code snapshots', () => {
+    for (const module of bundle.modules.values()) {
+      expect(module.code).toMatchSnapshot(module.path);
+    }
+  });
+});
+
+describe('esbuild iife global name', async () => {
+  // Real output of `esbuild src/entry.js --bundle --global-name=MyLib`
+  const bundle = (await unpackFixture('esbuild-iife-global.js'))!;
+
+  test('unwraps the assigned iife', () => {
+    expect(bundle).toBeDefined();
+    expect(bundle.modules.size).toBe(2);
+    expect(bundle.entryId).toBe('./index.js');
+  });
+});
+
+test('directive before iife', () => {
+  const bundle = unpack(`
+    "use strict";
+    (() => {
+      var __commonJS = (cb, mod) => function __require() {
+        return mod || (0, cb[Object.getOwnPropertyNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+      };
+      var require_a = __commonJS({
+        "a.js"(exports, module) {
+          module.exports = 42;
+        }
+      });
+      var x = require_a();
+      console.log(x);
+    })();
+  `);
+  expect(bundle?.modules.size).toBe(2);
+  expect(bundle?.entryId).toBe('./index.js');
+  expect(bundle?.modules.get('./index.js')?.code).toContain(
+    'require("./a.js")',
+  );
+});
+
+test('user __-prefixed value var survives in entry', () => {
+  const bundle = unpack(`
+    var __commonJS = (cb, mod) => function __require() {
+      return mod || (0, cb[Object.getOwnPropertyNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    };
+    var require_a = __commonJS({
+      "a.js"(exports, module) {
+        module.exports = 42;
+      }
+    });
+    var __foo = 42;
+    var x = require_a() + __foo;
+    console.log(x);
+  `);
+  expect(bundle?.entryId).toBe('./index.js');
+  expect(bundle?.modules.get('./index.js')?.code).toContain('var __foo = 42');
+});
+
 describe('esbuild scope-hoisted esm', () => {
   test('single module bundle', async () => {
     // Real output of `esbuild src/star.js --bundle --format=cjs` with no CJS
