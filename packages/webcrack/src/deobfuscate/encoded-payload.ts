@@ -93,6 +93,11 @@ function asPayloadInvocation(
     // `.constructor` or a computed access statically known to select
     // `constructor` (`["constructor"]`, `["con" + "structor"]`, ...).
     if (!isConstructorAccess(innerCallee.node)) return null;
+    // The receiver must itself be a pure payload expression (the
+    // JSFuck/JJEncode shape `[]["filter"]`, ...). A user object's
+    // `.constructor(...)()` (e.g. `g.constructor(...)()`) is a method
+    // call on user state, not a payload, and must never be rewritten.
+    if (!isPurePayload(innerCallee.node.object, path.scope)) return null;
   } else {
     return null;
   }
