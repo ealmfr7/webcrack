@@ -1,0 +1,36 @@
+{
+  "type": "webpack",
+  "entryId": "0",
+  "modules": [
+    {
+      "id": "0",
+      "path": "./index.js",
+      "isEntry": true,
+      "code": "const a = require(\"./1.js\");\nconst b = require(\"./2.js\");\nconst c = require(\"./3.js\");\nconst bDefault = b.default;\nconst cDefault = c;\nconst dDefault = b.default;\nconst eDefault = c;\nconsole.log(a.counter);\nconsole.log(bDefault.VERSION);\nconsole.log(cDefault.VERSION);"
+    },
+    {
+      "id": "1",
+      "path": "./1.js",
+      "isEntry": false,
+      "code": "export class counter {}\nlet _counter = 1;\ncounter = 2;"
+    },
+    {
+      "id": "2",
+      "path": "./2.js",
+      "isEntry": false,
+      "code": "const x = {};\nexport default 1;"
+    },
+    {
+      "id": "3",
+      "path": "./3.js",
+      "isEntry": false,
+      "code": "module.exports = {\n  VERSION: 1\n};"
+    },
+    {
+      "id": "4",
+      "path": "./4.js",
+      "isEntry": false,
+      "code": "export default class f {}"
+    }
+  ]
+}

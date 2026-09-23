@@ -1,0 +1,18 @@
+{
+  "type": "esbuild",
+  "entryId": "./index.js",
+  "modules": [
+    {
+      "id": "./index.js",
+      "path": "./index.js",
+      "isEntry": true,
+      "code": "// src/entry.js\nvar import_dep = __toESM(require(\"./src/dep.js\"));\nvar x = (0, import_dep.default)(1, 2);\nconsole.log(x);"
+    },
+    {
+      "id": "./src/dep.js",
+      "path": "./src/dep.js",
+      "isEntry": false,
+      "code": "module.exports = function add2(a, b) {\n  return a + b;\n};"
+    }
+  ]
+}

@@ -3,9 +3,15 @@
 End-to-end regression samples for `webcrack()`. Each `*.js` file in this
 directory is run through `webcrack()` by [`corpus.test.ts`](../corpus.test.ts)
 and the deobfuscated output is compared against the committed
-`<name>.js.snap` file snapshot.
+`<name>.js.snap` file snapshot. For samples that unpack to a bundle
+(webpack, browserify, esbuild, metro), the extracted bundle — type, entry
+id, and per-module path + code with modules sorted by id — is compared
+against a second committed `<name>.js.bundle.snap` file snapshot.
+Non-bundle samples assert that `result.bundle` is `undefined`, and a
+committed bundle snapshot that no longer unpacks fails instead of passing
+silently.
 
-Current samples (9):
+Current samples (11):
 
 | File                    | Category                          | Origin                                    |
 | ----------------------- | --------------------------------- | ----------------------------------------- |
@@ -15,6 +21,8 @@ Current samples (9):
 | `webpack-5.js`          | minified webpack 5 bundle         | Copy of `src/unpack/test/samples/`        |
 | `webpack-esm.js`        | webpack bundle (ESM)              | Copy of `src/unpack/test/samples/`        |
 | `browserify.js`         | minified browserify bundle        | Copy of `src/unpack/test/samples/`        |
+| `esbuild-iife.js`       | esbuild bundle (IIFE)             | Copy of `src/unpack/test/esbuild/`        |
+| `metro-basic.js`        | Metro bundle                      | Copy of `src/unpack/test/metro/`          |
 | `babel-transpiled.js`   | Babel-transpiled CommonJS output  | Self-generated (hand-written)             |
 | `minified-iife.js`      | minified plain script (IIFE)      | Self-generated (hand-written)             |
 | `bookmarklet.js`        | `javascript:` bookmarklet         | Self-generated (hand-written)             |
@@ -28,8 +36,9 @@ fixtures or hand-written for this corpus.
    are discovered from the directory listing, sorted for stable ordering).
 2. Generate its snapshot:
    `pnpm vitest run --no-isolate packages/webcrack/test/corpus.test.ts -u`
-3. Inspect the new `<name>.js.snap` diff to confirm the output looks right,
-   then commit both files.
+3. Inspect the new `<name>.js.snap` (and `<name>.js.bundle.snap`, for
+   bundle samples) diff to confirm the output looks right, then commit all
+   new files.
 
 ## Updating snapshots
 
