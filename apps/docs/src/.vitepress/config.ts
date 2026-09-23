@@ -43,6 +43,7 @@ export default defineConfig({
           { text: 'Transpile', link: '/concepts/transpile' },
           { text: 'Unpack Bundle', link: '/concepts/unpack' },
           { text: 'JSX', link: '/concepts/jsx' },
+          { text: 'Analysis', link: '/concepts/analysis' },
         ],
       },
     ],
