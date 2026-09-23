@@ -103,6 +103,43 @@ describe('endpoints', () => {
     const report = reportOf(`window.open("https://example.com/x", "_blank");`);
     expect(report.endpoints).toEqual([]);
   });
+
+  test('only global fetch receivers are endpoints', () => {
+    const report = reportOf(`
+      db.fetch("users");
+      window.fetch("https://w.example/x");
+      globalThis.fetch("https://g.example/x");
+      self.fetch("https://s.example/x");
+      fetch("https://bare.example/x");
+      fetch?.("https://optional.example/x");
+    `);
+    expect(report.endpoints.map((e) => e.url)).toEqual([
+      'https://w.example/x',
+      'https://g.example/x',
+      'https://s.example/x',
+      'https://bare.example/x',
+      'https://optional.example/x',
+    ]);
+  });
+
+  test('shadowed fetch and window are not endpoints', () => {
+    const report = reportOf(`
+      function fetch(u) { return u; }
+      fetch("https://a.example/x");
+    `);
+    expect(report.endpoints).toEqual([]);
+
+    const shadowedWindow = reportOf(`
+      const window = { fetch(u) { return u; } };
+      window.fetch("https://a.example/x");
+    `);
+    expect(shadowedWindow.endpoints).toEqual([]);
+
+    const shadowedParam = reportOf(`
+      function f(fetch) { return fetch("https://a.example/x"); }
+    `);
+    expect(shadowedParam.endpoints).toEqual([]);
+  });
 });
 
 describe('secrets', () => {
@@ -171,6 +208,14 @@ describe('regexes', () => {
       '/a\\d+/i',
       '/static-source/',
     ]);
+  });
+
+  test('optional RegExp call form', () => {
+    const report = reportOf(`
+      const a = RegExp?.("a+b");
+      const b = RegExp?.("c+d", "gi");
+    `);
+    expect(report.regexes.map((r) => r.value)).toEqual(['/a+b/', '/c+d/gi']);
   });
 });
 
