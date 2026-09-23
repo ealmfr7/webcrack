@@ -205,6 +205,48 @@ describe('aaencode lookalikes are never evaluated', () => {
     expect(changes).toBe(0);
     expect(output).toBe(generate(parse(input)));
   });
+
+  test('user o/c params leave the block untouched', async () => {
+    const { sandbox, calls } = throwingSandbox();
+    const code = await readFile(join(FIXTURES_DIR, 'basic.js'), 'utf8');
+    const input = `function f(o, c) {\n${code}\nreturn o + c;\n}`;
+    const { code: output, changes } = await runAaencode(input, sandbox);
+    expect(calls).toHaveLength(0);
+    expect(changes).toBe(0);
+    expect(output).toBe(generate(parse(input)));
+  });
+
+  test('user _ binding leaves the block untouched', async () => {
+    const { sandbox, calls } = throwingSandbox();
+    const code = await readFile(join(FIXTURES_DIR, 'basic.js'), 'utf8');
+    const input = `var _ = require("lodash");\n${code}\n_.map([1, 2], String);`;
+    const { code: output, changes } = await runAaencode(input, sandbox);
+    expect(calls).toHaveLength(0);
+    expect(changes).toBe(0);
+    expect(output).toBe(generate(parse(input)));
+  });
+
+  test('user ﾟωﾟﾉ binding leaves the block untouched', async () => {
+    const { sandbox, calls } = throwingSandbox();
+    const code = await readFile(join(FIXTURES_DIR, 'basic.js'), 'utf8');
+    const input = `var ﾟωﾟﾉ = 1;\n${code}`;
+    const { code: output, changes } = await runAaencode(input, sandbox);
+    expect(calls).toHaveLength(0);
+    expect(changes).toBe(0);
+    expect(output).toBe(generate(parse(input)));
+  });
+
+  test('unrelated bindings still decode', async () => {
+    const { sandbox, calls } = recordingSandbox();
+    const code = await readFile(join(FIXTURES_DIR, 'basic.js'), 'utf8');
+    const input = `var unrelated = 1;\n${code}`;
+    const { code: output, changes } = await runAaencode(input, sandbox);
+    expect(changes).toBe(1);
+    expect(output).toBe(
+      `var unrelated = 1;\nFunction("alert(1);")();`,
+    );
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('aaencode end to end (locally registered loop)', () => {

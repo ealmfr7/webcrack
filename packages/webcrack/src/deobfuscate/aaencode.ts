@@ -237,6 +237,99 @@ function isNode(value: unknown): value is t.Node {
   );
 }
 
+/**
+ * Whether any identifier the run assigns is a user binding that is live
+ * across the run. The replacement drops the run's assignments, so it is
+ * skipped when user code reads the name outside the run (e.g. `return o
+ * + c` after the block, `_.map(...)` after `var _ = ...`) or declared
+ * it beforehand (params, a preceding `var ﾟωﾟﾉ = ...`) and could observe
+ * the difference. A binding that is only declared afterwards and never
+ * read — or only referenced by the run's own encoder expressions, which
+ * Babel binds to the hoisted user declaration — is unaffected by the
+ * dropped assignments, so neighbouring `var c = 3` still decodes.
+ */
+function hasUserBinding(
+  scope: NodePath<t.Program | t.BlockStatement>['scope'],
+  runPaths: NodePath<t.Statement>[],
+  encodedPaths: Set<NodePath<t.Statement>>,
+): boolean {
+  const names = collectAssignedNames(runPaths.map((path) => path.node));
+  if (names.size === 0) return false;
+  const start = runPaths[0].node.start ?? 0;
+  for (const name of names) {
+    const binding = scope.getBinding(name);
+    if (!binding) continue;
+    if (
+      binding.referencePaths.some(
+        (reference) => !isInsideEncoded(reference, encodedPaths),
+      )
+    ) {
+      return true;
+    }
+    if ((binding.identifier.start ?? 0) < start) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `path` sits inside encoder output. The runs' own uses of the
+ * encoder variables bind to a hoisted user declaration of the same name,
+ * so only references outside every candidate run count as user reads.
+ */
+function isInsideEncoded(
+  path: NodePath,
+  encodedPaths: Set<NodePath<t.Statement>>,
+): boolean {
+  let current: NodePath | null = path;
+  while (current) {
+    if (encodedPaths.has(current as NodePath<t.Statement>)) return true;
+    current = current.parentPath;
+  }
+  return false;
+}
+
+/** Root identifier names of every assignment target in the run. */
+function collectAssignedNames(statements: t.Statement[]): Set<string> {
+  const names = new Set<string>();
+  for (const statement of statements) {
+    collectAssignmentTargets(statement, names);
+  }
+  return names;
+}
+
+function collectAssignmentTargets(node: t.Node, names: Set<string>): void {
+  if (t.isAssignmentExpression(node)) {
+    collectTargetRoot(node.left, names);
+    // Targets nest (`o=(ﾟｰﾟ) =_=3`); the right side can hold more.
+    collectAssignmentTargets(node.right, names);
+    // A computed member target can also embed assignments; visit it.
+    if (t.isMemberExpression(node.left) && node.left.computed) {
+      collectAssignmentTargets(node.left.property, names);
+    }
+    return;
+  }
+  for (const value of Object.values(node) as unknown[]) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (isNode(item)) collectAssignmentTargets(item, names);
+      }
+    } else if (isNode(value)) {
+      collectAssignmentTargets(value, names);
+    }
+  }
+}
+
+function collectTargetRoot(
+  target: t.Node | t.Identifier | t.MemberExpression | null | undefined,
+  names: Set<string>,
+): void {
+  let current: t.Node | null | undefined = target;
+  while (t.isMemberExpression(current)) {
+    current = current.object;
+  }
+  if (t.isIdentifier(current)) names.add(current.name);
+}
+
 async function decodeRuns(
   container: NodePath<t.Program | t.BlockStatement>,
   state: { changes: number },
@@ -247,7 +340,7 @@ async function decodeRuns(
   if (container.scope.getBinding('Function')) return;
 
   const body = container.get('body');
-  const runs: { start: number; end: number; executor: Executor }[] = [];
+  const candidates: { start: number; end: number; executor: Executor }[] = [];
   let index = 0;
   while (index < body.length) {
     if (!isOpener(body[index].node)) {
@@ -261,9 +354,20 @@ async function decodeRuns(
       index++;
       continue;
     }
-    runs.push({ start: index, end, executor });
+    candidates.push({ start: index, end, executor });
     index = end + 1;
   }
+  // Replacing a run drops its assignments, so a run whose assigned names
+  // are live user bindings is not disposable encoder output. References
+  // are judged against every candidate run: the runs' own uses of the
+  // encoder variables must not count as user reads.
+  const encodedPaths = new Set<NodePath<t.Statement>>(
+    candidates.flatMap(({ start, end }) => body.slice(start, end + 1)),
+  );
+  const runs = candidates.filter(
+    ({ start, end }) =>
+      !hasUserBinding(container.scope, body.slice(start, end + 1), encodedPaths),
+  );
   // Apply right to left: splicing a run only shifts the indices after it,
   // so earlier runs keep valid paths. Within a run the replacement keeps
   // the array length and removals go from last to first for the same reason.
