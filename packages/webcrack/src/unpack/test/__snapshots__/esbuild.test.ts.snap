@@ -1,0 +1,51 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`esbuild commonjs > module code snapshots > ./src/greet.js 1`] = `
+"var import_math = __toESM(require("./src/math.js"));
+function greet(name) {
+  return "Hello, " + name + "! 1 + 2 = " + import_math.add(1, 2);
+}
+module.exports = greet;"
+`;
+
+exports[`esbuild commonjs > module code snapshots > ./src/index.js 1`] = `
+"var import_greet = __toESM(require("./src/greet.js"));
+var fs = require("fs");
+console.log((0, import_greet.default)("world"));"
+`;
+
+exports[`esbuild commonjs > module code snapshots > ./src/math.js 1`] = `
+"function add(a, b) {
+  return a + b;
+}
+function sub(a, b) {
+  return a - b;
+}
+module.exports = {
+  add,
+  sub
+};"
+`;
+
+exports[`esbuild scope-hoisted esm > single module bundle 1`] = `
+"var __defProp = Object.defineProperty;
+var __export = (target, all) => {
+  for (var name in all) __defProp(target, name, {
+    get: all[name],
+    enumerable: true
+  });
+};
+
+// src/math.js
+function add(a, b) {
+  return a + b;
+}
+
+// src/index.js
+__export({}, {
+  add: () => add,
+  default: () => index_default
+});
+var index_default = add(1, 2);
+console.log(index_default);"
+`;
