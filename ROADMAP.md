@@ -61,7 +61,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 ## Robustez
 
 - [x] Corpus de regresión con muestras reales y su resultado esperado (snapshots)
-- [ ] Tiempo límite y límite de memoria en el sandbox (`isolated-vm`)
+- [x] Tiempo límite y límite de memoria en el sandbox (`isolated-vm`)
 
 ## Flujo de trabajo
 
