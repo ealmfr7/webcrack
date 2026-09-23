@@ -1,0 +1,1 @@
+{"library":"tiny-hash","version":"1.0.0","path":"tiny-hash/fnv1a.js","hash":"405ca3a0c16e31e4fe1f8c989056d6ee3f7d54458bece4f4f8a038ce5bad0929","source":"function fnv1a(str) {\n  let hash = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    hash ^= str.charCodeAt(i);\n    hash = Math.imul(hash, 0x01000193);\n  }\n  return hash >>> 0;\n}\nmodule.exports = fnv1a;\n"}
