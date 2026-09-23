@@ -15,6 +15,7 @@ import deadCode from './dead-code';
 import opaquePredicates from './opaque-predicates';
 import { findDecoders } from './decoder';
 import encodedPayload from './encoded-payload';
+import jjencode from './jjencode';
 import evalUnwrap from './eval-unwrap';
 import genericDecoders from './generic-decoders';
 import inlineDecodedStrings from './inline-decoded-strings';
@@ -48,9 +49,8 @@ export default {
       const changesBeforeUnwrap = state.changes;
       state.changes += applyTransforms(ast, [packer, evalUnwrap]).changes;
       if (sandbox) {
-        state.changes += (
-          await applyTransformAsync(ast, encodedPayload, sandbox)
-        ).changes;
+        for (const t of [encodedPayload, jjencode /*, aaencode — wave 6.4 */])
+          state.changes += (await applyTransformAsync(ast, t, sandbox)).changes;
       }
       if (state.changes === changesBeforeUnwrap) break;
     }
