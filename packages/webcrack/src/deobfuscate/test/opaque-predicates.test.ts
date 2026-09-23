@@ -315,3 +315,20 @@ test('noScope: skips while without crashing', () => {
   break;
 }`);
 });
+
+// With noScope path.scope is null, so the replace path cannot use
+// binding-based collision checks and falls back to the syntactic
+// hasLexicalDeclarations check: the block with `let` must be kept.
+test('noScope: replaces if and keeps block for lexical declarations', () => {
+  const result = expectNoScopeJS(`
+    if (5 > 3) {
+      let foo = 2;
+      console.log(foo);
+    }
+  `);
+  expect(result.changes).toBe(1);
+  expect(result.code).toBe(`{
+  let foo = 2;
+  console.log(foo);
+}`);
+});
