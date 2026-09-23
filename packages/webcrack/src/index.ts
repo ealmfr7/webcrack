@@ -197,9 +197,11 @@ export interface Options {
    * and unified line diff) in `result.trace`. `save()` writes them as
    * `trace.diff`.
    *
-   * Tracing uses a module-global tracer: concurrent `webcrack()` calls with
-   * `trace` enabled are not supported, await each call before starting the
-   * next one.
+   * Tracing is reentrant on Node.js (each call collects only its own
+   * entries via `AsyncLocalStorage`), so concurrent `webcrack()` calls with
+   * `trace` enabled are supported. Where `AsyncLocalStorage` is unavailable
+   * (e.g. browsers) tracing falls back to a single module-global tracer, so
+   * overlapping async calls may observe each other's entries there.
    * @default false
    */
   trace?: boolean;
