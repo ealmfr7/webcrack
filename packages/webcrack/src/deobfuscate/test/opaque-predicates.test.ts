@@ -143,3 +143,100 @@ test('non-literal while test is kept', () =>
       break;
     }
   `));
+
+test('if with side-effectful sequence test is kept', () =>
+  expectJS(`
+    if ((sideEffect(), true)) {
+      console.log("foo");
+    } else {
+      console.log("bar");
+    }
+  `).toMatchInlineSnapshot(`
+    if (sideEffect(), true) {
+      console.log("foo");
+    } else {
+      console.log("bar");
+    }
+  `));
+
+test('if with void call test is kept', () =>
+  expectJS(`
+    if (void sideEffect()) {
+      console.log("foo");
+    }
+  `).toMatchInlineSnapshot(`
+    if (void sideEffect()) {
+      console.log("foo");
+    }
+  `));
+
+test('logical with side-effectful left is kept', () =>
+  expectJS(`
+    console.log((sideEffect(), 1) && foo);
+  `).toMatchInlineSnapshot(`console.log((sideEffect(), 1) && foo);`));
+
+test('removed branch preserves hoisted var and function', () =>
+  expectJS(`
+    if (1 === 2) {
+      var v = 1;
+      function g() {}
+    }
+    console.log(v, g);
+  `).toMatchInlineSnapshot(`
+    var v, g;
+    console.log(v, g);
+  `));
+
+test('removed while body preserves hoisted var', () =>
+  expectJS(`
+    while (0) {
+      var w = 1;
+    }
+    console.log(w);
+  `).toMatchInlineSnapshot(`
+    var w;
+    console.log(w);
+  `));
+
+test('kept let capturing an outer reference stays in a block', () =>
+  expectJS(`
+    if (5 > 3) {
+      let foo = 1;
+    }
+    console.log(foo);
+  `).toMatchInlineSnapshot(`
+    {
+      let foo = 1;
+    }
+    console.log(foo);
+  `));
+
+test('kept const capturing a function reference stays in a block', () =>
+  expectJS(`
+    function f() {
+      return bar;
+    }
+    if (5 > 3) {
+      const bar = 1;
+    }
+  `).toMatchInlineSnapshot(`
+    function f() {
+      return bar;
+    }
+    {
+      const bar = 1;
+    }
+  `));
+
+test('labeled if keeps its label and block', () =>
+  expectJS(`
+    lbl: if (5 > 3) {
+      console.log("a");
+      break lbl;
+    }
+  `).toMatchInlineSnapshot(`
+    lbl: {
+      console.log("a");
+      break lbl;
+    }
+  `));
