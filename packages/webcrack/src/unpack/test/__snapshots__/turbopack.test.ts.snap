@@ -1,0 +1,96 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`turbopack array chunk > module code snapshots 1`] = `
+{
+  "entryId": "0",
+  "modules": [
+    {
+      "code": "const dep = require("./2.js");
+module.exports = "entry-" + dep;",
+      "id": "0",
+      "isEntry": true,
+      "path": "./0.js",
+    },
+    {
+      "code": "module.exports = "dep";",
+      "id": "2",
+      "isEntry": false,
+      "path": "./2.js",
+    },
+  ],
+  "type": "turbopack",
+}
+`;
+
+exports[`turbopack minified numeric-id chunk > module code snapshots 1`] = `
+{
+  "entryId": "5",
+  "modules": [
+    {
+      "code": "const m = require("./6.js");
+async function load() {
+  return import("./7.js");
+}
+const other = e.r("node:events");
+e.e.hello = "hi " + m.name;
+return load;",
+      "id": "5",
+      "isEntry": true,
+      "path": "./5.js",
+    },
+    {
+      "code": "e.e.name = "world";",
+      "id": "6",
+      "isEntry": false,
+      "path": "./6.js",
+    },
+    {
+      "code": "e.e.value = 42;",
+      "id": "7",
+      "isEntry": false,
+      "path": "./7.js",
+    },
+  ],
+  "type": "turbopack",
+}
+`;
+
+exports[`turbopack object-keyed chunk > module code snapshots 1`] = `
+{
+  "entryId": "[project]/src/greet.js [app-client] (ecmascript)",
+  "modules": [
+    {
+      "code": "const nameModule = require("./src/name.js");
+const fs = require("node:fs");
+async function loadExtra() {
+  const extra = await import("./src/extra.js");
+  return extra.value;
+}
+function greet() {
+  return "hello " + nameModule.name;
+}
+module.exports = {
+  greet,
+  loadExtra
+};",
+      "id": "[project]/src/greet.js [app-client] (ecmascript)",
+      "isEntry": true,
+      "path": "./src/greet.js",
+    },
+    {
+      "code": "const missing = __turbopack_require__(99999);
+exports.name = "world";",
+      "id": "[project]/src/name.js [app-client] (ecmascript)",
+      "isEntry": false,
+      "path": "./src/name.js",
+    },
+    {
+      "code": "exports.value = 42;",
+      "id": "[project]/src/extra.js [app-client] (ecmascript)",
+      "isEntry": false,
+      "path": "./src/extra.js",
+    },
+  ],
+  "type": "turbopack",
+}
+`;

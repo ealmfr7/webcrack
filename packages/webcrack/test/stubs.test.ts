@@ -10,10 +10,11 @@ import tsEnum from '../src/transpile/transforms/ts-enum';
 import type { Bundle } from '../src/unpack/bundle';
 import { unpackParcel } from '../src/unpack/parcel';
 import { unpackRollup } from '../src/unpack/rollup';
-import { unpackTurbopack } from '../src/unpack/turbopack';
 
 // Stub unpackers expose a .visitor(options) returning an empty visitor
-const unpackers = [unpackRollup, unpackParcel, unpackTurbopack];
+// (unpackTurbopack was implemented in task 3.3 and is covered by
+// src/unpack/test/turbopack.test.ts instead)
+const unpackers = [unpackRollup, unpackParcel];
 // Stub transforms are no-op Transform objects
 const transforms = [spreadHelpers, slicedToArray, tsEnum, packer, evalUnwrap];
 
