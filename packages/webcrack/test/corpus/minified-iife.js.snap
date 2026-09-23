@@ -1,0 +1,39 @@
+(function () {
+  var t = {
+    items: [],
+    limit: 10
+  };
+  var e = "https://example.com/api/items?";
+  var n = {
+    cache: "no-store"
+  };
+  function r(t, e) {
+    var n = 0;
+    return t.split("").reduce(function (t, r) {
+      n = (n << 5) - n + r.charCodeAt(0) | 0;
+      return t + String.fromCharCode(n % 94 + 33);
+    }, e || "");
+  }
+  async function o() {
+    try {
+      var o = await (await fetch(e + "limit=" + t.limit, n)).json();
+      t.items = o.data.filter(function (t) {
+        return t.active === true;
+      }).map(function (t) {
+        return {
+          id: t.id,
+          slug: r(t.title),
+          price: Math.round(t.price * 100) * 0.19 / 100
+        };
+      });
+      console.log("loaded " + t.items.length + " items");
+    } catch (t) {
+      console.error("failed to load items", t);
+    }
+  }
+  document.addEventListener("DOMContentLoaded", o);
+  window.__shop = {
+    state: t,
+    reload: o
+  };
+})();

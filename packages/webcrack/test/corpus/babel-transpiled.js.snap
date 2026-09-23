@@ -1,0 +1,110 @@
+"use strict";
+
+function _interopRequireDefault(e) {
+  if (e && e.__esModule) {
+    return e;
+  } else {
+    return {
+      default: e
+    };
+  }
+}
+function _slicedToArray(r, e) {
+  return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest();
+}
+function _nonIterableRest() {
+  throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+}
+function _unsupportedIterableToArray(r, a) {
+  if (r) {
+    if (typeof r == "string") {
+      return _arrayLikeToArray(r, a);
+    }
+    var t = {}.toString.call(r).slice(8, -1);
+    if (t === "Object" && r.constructor) {
+      t = r.constructor.name;
+    }
+    if (t === "Map" || t === "Set") {
+      return Array.from(r);
+    } else if (t === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t)) {
+      return _arrayLikeToArray(r, a);
+    } else {
+      return undefined;
+    }
+  }
+}
+function _arrayLikeToArray(r, a) {
+  if (a == null || a > r.length) {
+    a = r.length;
+  }
+  for (var e = 0, n = Array(a); e < a; e++) {
+    n[e] = r[e];
+  }
+  return n;
+}
+function _iterableToArrayLimit(r, l) {
+  var t = r == null ? null : typeof Symbol != "undefined" && r[Symbol.iterator] || r["@@iterator"];
+  if (t != null) {
+    var e;
+    var n;
+    var i;
+    var u;
+    var a = [];
+    var f = true;
+    var o = false;
+    try {
+      i = (t = t.call(r)).next;
+      if (l === 0) {
+        if (Object(t) !== t) {
+          return;
+        }
+        f = false;
+      } else {
+        for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = true);
+      }
+    } catch (r) {
+      o = true;
+      n = r;
+    } finally {
+      try {
+        if (!f && t.return != null && (u = t.return(), Object(u) !== u)) {
+          return;
+        }
+      } finally {
+        if (o) {
+          throw n;
+        }
+      }
+    }
+    return a;
+  }
+}
+function _arrayWithHoles(r) {
+  if (Array.isArray(r)) {
+    return r;
+  }
+}
+var _path = _interopRequireDefault(require("path"));
+async function buildReport(_ref) {
+  var _ref2 = _slicedToArray(_ref, 2);
+  var title = _ref2[0];
+  var _ref2$1$lines = _ref2[1].lines;
+  var lines = _ref2$1$lines === undefined ? [] : _ref2$1$lines;
+  var outDir = process.env.REPORT_DIR ?? _path.default.join("reports", "latest");
+  var entries = lines.map(function (line, index) {
+    return `${index + 1}: ${line.trim()}`;
+  }).filter(function (entry) {
+    return entry.length > 0;
+  });
+  return {
+    title: title,
+    outDir: outDir,
+    entries: entries
+  };
+}
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.buildReport = buildReport;
+exports.default = undefined;
+var _default = exports.default = buildReport;

@@ -1,0 +1,20 @@
+(function () {
+  var d = document;
+  var s = d.createElement("div");
+  s.setAttribute("style", "position:fixed;top:0;left:0;z-index:99999;background:#fff;color:#000;padding:8px;font:12px monospace;");
+  var links = d.getElementsByTagName("a");
+  var seen = {};
+  var count = 0;
+  for (var i = 0; i < links.length; i++) {
+    var h = links[i].href;
+    if (h && !seen[h]) {
+      seen[h] = 1;
+      count++;
+    }
+  }
+  s.textContent = "Links on this page: " + count + " (" + d.title + ")";
+  d.body.appendChild(s);
+  setTimeout(function () {
+    s.parentNode.removeChild(s);
+  }, 5000);
+})();
