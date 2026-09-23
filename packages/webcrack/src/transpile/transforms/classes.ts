@@ -32,6 +32,9 @@ type HelperKind =
   | 'getPrototypeOf'
   | 'assertThisInitialized'
   | 'superPropGet'
+  | 'toPrimitive'
+  | 'toPropertyKey'
+  | 'superPropBase'
   | 'lazy';
 
 type HelperSets = Record<HelperKind, Set<string>>;
@@ -65,6 +68,9 @@ function emptyHelpers(): HelperSets {
     getPrototypeOf: new Set(),
     assertThisInitialized: new Set(),
     superPropGet: new Set(),
+    toPrimitive: new Set(),
+    toPropertyKey: new Set(),
+    superPropBase: new Set(),
     lazy: new Set(),
   };
 }
@@ -554,6 +560,69 @@ function isLazyHelperFn(fn: PlainFunction, name: string): boolean {
   return selfAssigns(fn, name);
 }
 
+// `function (t, r) { ... t[Symbol.toPrimitive] ...; throw ... }`.
+// Cleanup-only: never matched at usage sites.
+function isToPrimitiveFn(fn: PlainFunction): boolean {
+  const params = fnParams(fn);
+  if (!params || params.length !== 2) return false;
+  let sawSymbol = false;
+  walkNodes(
+    fn.body,
+    (node) => {
+      if (
+        !sawSymbol &&
+        t.isMemberExpression(node) &&
+        t.isIdentifier(node.object, { name: 'Symbol' })
+      ) {
+        sawSymbol = true;
+      }
+    },
+    true,
+  );
+  return sawSymbol && throwsHelperError(fn);
+}
+
+// `function (t, o) { for (; !{}.hasOwnProperty.call(t, o) && ...); return t; }`.
+// Cleanup-only: never matched at usage sites.
+function isSuperPropBaseFn(fn: PlainFunction): boolean {
+  const params = fnParams(fn);
+  if (!params || params.length !== 2) return false;
+  const [first] = params as [string, string];
+  let sawLoop = false;
+  let returnsFirst = false;
+  walkNodes(
+    fn.body,
+    (node) => {
+      if (t.isForStatement(node) || t.isWhileStatement(node)) sawLoop = true;
+      else if (
+        t.isReturnStatement(node) &&
+        t.isIdentifier(node.argument, { name: first })
+      ) {
+        returnsFirst = true;
+      }
+    },
+    true,
+  );
+  return sawLoop && returnsFirst && hasMemberNamed(fn, 'hasOwnProperty');
+}
+
+// `function (t) { var i = _toPrimitive(t, "string"); ... typeof ... }`.
+// Cleanup-only: never matched at usage sites.
+function isToPropertyKeyFn(fn: PlainFunction, known: Set<string>): boolean {
+  const params = fnParams(fn);
+  if (!params || params.length !== 1) return false;
+  if (!callsNamed(fn, known)) return false;
+  let sawTypeof = false;
+  walkNodes(
+    fn.body,
+    (node) => {
+      if (t.isUnaryExpression(node, { operator: 'typeof' })) sawTypeof = true;
+    },
+    true,
+  );
+  return sawTypeof;
+}
+
 function classifyHelper(
   fn: PlainFunction,
   name: string,
@@ -573,6 +642,16 @@ function classifyHelper(
   }
   if (isInheritsFn(fn)) {
     helpers.inherits.add(name);
+    return true;
+  }
+  // Before the possible-constructor-return check: `_toPrimitive` also takes
+  // two params and returns its first one, but only this shape reads Symbol.
+  if (isToPrimitiveFn(fn)) {
+    helpers.toPrimitive.add(name);
+    return true;
+  }
+  if (isSuperPropBaseFn(fn)) {
+    helpers.superPropBase.add(name);
     return true;
   }
   if (isPossibleConstructorReturnFn(fn)) {
@@ -617,6 +696,10 @@ function classifyLateHelper(
   }
   if (isSuperPropGetFn(fn, known)) {
     helpers.superPropGet.add(name);
+    return true;
+  }
+  if (isToPropertyKeyFn(fn, helpers.toPrimitive)) {
+    helpers.toPropertyKey.add(name);
     return true;
   }
   return false;
@@ -1088,12 +1171,8 @@ function scanCallExpression(
     return;
   }
 
-  if (!t.isMemberExpression(node.callee)) return;
-  const prop = propNameOf(node.callee);
-  const receiver = node.arguments[0];
-  if (!t.isThisExpression(receiver)) return;
-
-  // `_callSuper(this, Cls, args)` (constructor only).
+  // `_callSuper(this, Cls, args)` (constructor only). Checked before the
+  // member-callee gate below: `_callSuper` is a plain identifier callee.
   if (
     ctx.inConstructor &&
     isHelperCall(node, helpers.callSuper) &&
@@ -1107,6 +1186,11 @@ function scanCallExpression(
     scan.superCalls.push({ call: path, top, kind: 'callSuper' });
     return;
   }
+
+  if (!t.isMemberExpression(node.callee)) return;
+  const prop = propNameOf(node.callee);
+  const receiver = node.arguments[0];
+  if (!t.isThisExpression(receiver)) return;
 
   // Classic `S.call(this, ...)` / `S.apply(this, ...)` (constructor only).
   if (
@@ -2138,6 +2222,22 @@ function buildClass(info: AnalyzedClass): void {
 // True when every remaining reference lives inside the helper's own
 // definition (recursion, self-rewrites like `_gpo = ...`), i.e. nothing
 // else in the program uses it anymore.
+// Exported bindings stay: removing them would break importers even when
+// nothing in this program references them anymore.
+function isExported(binding: Binding): boolean {
+  let current: NodePath | null = binding.path;
+  while (current) {
+    if (
+      current.isExportNamedDeclaration() ||
+      current.isExportDefaultDeclaration()
+    ) {
+      return true;
+    }
+    current = current.parentPath;
+  }
+  return false;
+}
+
 function isHelperDead(binding: Binding): boolean {
   const defNode = binding.path.node;
   return binding.referencePaths.every((ref) => {
@@ -2165,7 +2265,7 @@ function removeDeadHelpers(
     let removed = false;
     for (const name of all) {
       const binding = programPath.scope.getBinding(name);
-      if (!binding || !isHelperDead(binding)) continue;
+      if (!binding || isExported(binding) || !isHelperDead(binding)) continue;
       const bpath = binding.path;
       if (bpath.isFunctionDeclaration()) {
         bpath.remove();
