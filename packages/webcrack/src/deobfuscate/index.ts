@@ -111,6 +111,16 @@ export default {
       }
     }
 
+    // The string-array block above removes nodes without re-crawling, so
+    // scope caches may still reference removed nodes. Re-collect before
+    // the scope-dependent genericDecoders step.
+    traverse(ast, {
+      Program(path) {
+        path.scope.crawl();
+        path.stop();
+      },
+    });
+
     state.changes += (
       await applyTransformAsync(ast, genericDecoders, sandbox)
     ).changes;
