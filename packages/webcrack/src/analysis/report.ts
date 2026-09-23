@@ -68,6 +68,21 @@ function staticString(node: t.Node | null | undefined): string | null {
   return null;
 }
 
+/**
+ * Method from a `fetch`/`$.ajax`-style options object: the default applies
+ * only when no method key is present; a present-but-dynamic key yields
+ * `null` since the method is not statically known.
+ */
+function configMethod(
+  options: t.Node | null,
+  names: string[],
+  defaultMethod: string,
+): string | null {
+  if (!options || !t.isObjectExpression(options)) return defaultMethod;
+  if (staticPropNode(options, names) === null) return defaultMethod;
+  return staticProp(options, names)?.toUpperCase() ?? null;
+}
+
 /** Read a statically-known string property (`{ method: "POST" }`). */
 function staticProp(obj: t.ObjectExpression, names: string[]): string | null {
   for (const prop of obj.properties) {
@@ -230,20 +245,12 @@ function endpointFromCall(
 
   // fetch(url, { method })
   if (t.isIdentifier(callee) && callee.name === 'fetch') {
-    const options = arg(1);
-    const method =
-      options && t.isObjectExpression(options)
-        ? (staticProp(options, ['method'])?.toUpperCase() ?? 'GET')
-        : 'GET';
+    const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
   // window.fetch(url, ...) — same shape as fetch
   if (isMember(callee) && propName(callee) === 'fetch') {
-    const options = arg(1);
-    const method =
-      options && t.isObjectExpression(options)
-        ? (staticProp(options, ['method'])?.toUpperCase() ?? 'GET')
-        : 'GET';
+    const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
   if (!isMember(callee)) {
@@ -318,18 +325,13 @@ function endpointFromCall(
     const first = arg(0);
     if (first && t.isObjectExpression(first)) {
       return {
-        method:
-          staticProp(first, ['method', 'type'])?.toUpperCase() ?? 'GET',
+        method: configMethod(first, ['method', 'type'], 'GET'),
         url: staticString(staticPropNode(first, ['url'])),
         line: 0,
         column: 0,
       };
     }
-    const settings = arg(1);
-    const method =
-      settings && t.isObjectExpression(settings)
-        ? (staticProp(settings, ['method', 'type'])?.toUpperCase() ?? 'GET')
-        : 'GET';
+    const method = configMethod(arg(1), ['method', 'type'], 'GET');
     return { method, url: staticString(first), line: 0, column: 0 };
   }
 

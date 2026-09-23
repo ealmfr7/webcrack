@@ -75,12 +75,27 @@ describe('endpoints', () => {
 
   test('dynamic urls come back as null', () => {
     const report = reportOf(`
-      fetch(base + "/users", { method: getMethod() });
+      fetch(base + "/users");
       axios.post(computedUrl, {});
     `);
     expect(report.endpoints).toEqual([
       { method: 'GET', url: null, line: 2, column: 6 },
       { method: 'POST', url: null, line: 3, column: 6 },
+    ]);
+  });
+
+  test('present-but-dynamic method comes back as null, not GET', () => {
+    const report = reportOf(`
+      fetch("https://a.example/x", { method: getMethod() });
+      fetch("https://a.example/y");
+      $.ajax({ url: "/api/y", method: someVar });
+      $.ajax({ url: "/api/z" });
+    `);
+    expect(report.endpoints).toEqual([
+      { method: null, url: 'https://a.example/x', line: 2, column: 6 },
+      { method: 'GET', url: 'https://a.example/y', line: 3, column: 6 },
+      { method: null, url: '/api/y', line: 4, column: 6 },
+      { method: 'GET', url: '/api/z', line: 5, column: 6 },
     ]);
   });
 
