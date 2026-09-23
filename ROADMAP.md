@@ -20,7 +20,7 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 - [x] Metro / React Native (`__d(factory, id, deps)`)
 - [x] Parcel
 - [x] Turbopack
-- [ ] Cargar varios chunks a la vez y reconstruir el grafo completo de módulos
+- [x] Cargar varios chunks a la vez y reconstruir el grafo completo de módulos
 
 ## Prioridad 3: transpilación inversa (`transpile/`)
 
@@ -48,15 +48,15 @@ Leyenda: `[ ]` pendiente · `[~]` en progreso · `[x]` hecho
 ## Prioridad 6: nombres y legibilidad
 
 - [x] Renombrado por heurística: `require("x")` → `x`, `event`, índices de `for`, props de React
-- [ ] Renombrado opcional con un LLM, aplicado mediante `scope.rename`
-- [ ] Reconocer librerías (lodash, react, crypto-js…) por hash estructural del AST → `mappings` automáticos
+- [x] Renombrado opcional con un LLM, aplicado mediante `scope.rename`
+- [x] Reconocer librerías (lodash, react, crypto-js…) por hash estructural del AST → `mappings` automáticos
 
 ## Prioridad 7: salidas para análisis
 
-- [ ] `report.json`: endpoints, URLs, claves, regex, strings interesantes
-- [ ] Grafo de módulos y de llamadas (DOT / JSON)
-- [ ] Source map de la salida al original para poner breakpoints sobre el código limpio
-- [ ] `--trace`: diff de lo que cambió cada pase
+- [x] `report.json`: endpoints, URLs, claves, regex, strings interesantes
+- [x] Grafo de módulos y de llamadas (DOT / JSON)
+- [x] Source map de la salida al original para poner breakpoints sobre el código limpio
+- [x] `--trace`: diff de lo que cambió cada pase
 
 ## Robustez
 
