@@ -344,7 +344,7 @@ pisarse:
       de llamadas; entre módulos vía imports).
 - [x] **M2.2** `wc_graph` (`modules` con `moduleGraph`, `calls` con
       `callGraph`), recortado por `root` + `depth`; formatos `tree`/`json`/`dot`.
-- [ ] **M2.3** `wc_annotate`: renames con `scope.rename` sobre el AST del
+- [x] **M2.3** `wc_annotate`: renames con `scope.rename` sobre el AST del
       módulo, regenerar código, reindexar solo ese módulo, persistir en
       `annotations.json` y reaplicar al cargar de caché. Las notas se muestran
       en `wc_read`/`wc_outline` junto al símbolo.
