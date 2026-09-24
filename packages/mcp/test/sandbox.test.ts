@@ -117,6 +117,60 @@ describe('evaluateInModule', () => {
     await expect(evaluateInModule(code, 'z', OPTS)).resolves.toBe('6');
   });
 
+  test('a CJS top-level const is visible to the expression', async () => {
+    const code = 'const hidden = 5; module.exports = hidden;';
+    await expect(evaluateInModule(code, 'hidden', OPTS)).resolves.toBe('5');
+  });
+
+  test('a script with top-level let and class is visible', async () => {
+    const code = 'let a = 1; class C { static v = 2 }';
+    await expect(evaluateInModule(code, 'a + C.v', OPTS)).resolves.toBe('3');
+  });
+
+  test('an ESM module can call its default export before declaration', async () => {
+    const code = [
+      'const v = decode(21);',
+      'export default function decode(i) { return i * 2; }',
+    ].join('\n');
+    await expect(evaluateInModule(code, 'v', OPTS)).resolves.toBe('42');
+  });
+
+  test('an anonymous default export is hoisted and callable early', async () => {
+    const code = [
+      'const v = __wc_default();',
+      'export default function () { return 42; }',
+    ].join('\n');
+    // The reserved hoisted name is callable before the declaration line.
+    await expect(evaluateInModule(code, 'v', OPTS)).resolves.toBe('42');
+  });
+
+  test('an anonymous default export reports name "default"', async () => {
+    await expect(
+      evaluateInModule(
+        'export default function () { return 42; }',
+        'module.exports.default.name',
+        OPTS,
+      ),
+    ).resolves.toBe('default');
+    await expect(
+      evaluateInModule(
+        'export default class { static v = 7 }',
+        'module.exports.default.name',
+        OPTS,
+      ),
+    ).resolves.toBe('default');
+  });
+
+  test('a top-level for-let keeps block scoping', async () => {
+    const code = [
+      'var fns = [];',
+      'for (let i = 0; i < 3; i++) { fns.push(() => i); }',
+    ].join('\n');
+    await expect(
+      evaluateInModule(code, 'fns.map((g) => g()).join(",")', OPTS),
+    ).resolves.toBe('0,1,2');
+  });
+
   test('a for-let inside a function keeps block scoping', async () => {
     const code = [
       'export const z = 0;',
