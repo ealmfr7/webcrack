@@ -16,7 +16,7 @@ export interface ToolContext {
 export interface ToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
   title: string;
-  /** Says when to use the tool and what it returns. Tuned with the evals. */
+  /** Says when to use the tool and what it returns. Keep it short; it is part of the product. */
   description: string;
   inputSchema: Shape;
   annotations?: ToolAnnotations;
