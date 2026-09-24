@@ -1,5 +1,6 @@
 import type { Report } from 'webcrack/analysis';
 import type { InterpreterDispatchKind } from 'webcrack/analysis';
+import type { Finding } from './findings';
 
 /**
  * Data model of an opened bundle/script. Everything except `ast` caches must
@@ -281,4 +282,12 @@ export interface Workspace {
   interpreters: InterpreterSummary[];
   annotations: Annotation[];
   stats: { openMs: number; techniques: string[] };
+  /**
+   * Precomputed AST-based findings (`sinks`/`storage`/`crypto`) per module
+   * path — "process once, query many". Computed by `store.open` (all
+   * modules) and refreshed by `store.commit` (changed modules only),
+   * persisted as `findings.json`. Absent on old disk caches and hand-built
+   * workspaces, where queries fall back to parsing on demand.
+   */
+  findings?: Record<string, Finding[]>;
 }

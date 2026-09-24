@@ -14,6 +14,7 @@ import {
   readWorkspaceFromCache,
   writeWorkspaceToCache,
 } from './cache';
+import { collectModuleAstFindings, precomputeModuleFindings } from './findings';
 import { buildIndex } from './indexer';
 import { loadSource } from './loader';
 import { tagModule } from './tags';
@@ -214,6 +215,29 @@ function retagModule(
 }
 
 /**
+ * A webcrack failure that looks like a syntax error is almost always a wrong
+ * input, not a webcrack bug: surface it as an actionable `WcError` (with the
+ * parser's location) instead of an "Internal error". Anything else —
+ * including the timeout `WcError` — passes through untouched.
+ */
+export function toActionableOpenError(error: unknown): unknown {
+  if (error instanceof WcError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const code = (error as { code?: unknown }).code;
+  const looksLikeParseError =
+    code === 'BABEL_PARSER_SYNTAX_ERROR' ||
+    /unexpected token|unterminated|missing (semicolon|parenthesis)|unknown: /i.test(
+      message,
+    );
+  if (!looksLikeParseError) return error;
+  return new WcError(
+    `Could not parse the input as JavaScript: ${message}. ` +
+      `Check that the source is JavaScript; if it was meant as a file path or URL, ` +
+      `check that it exists and is readable; or retry with options { "deobfuscate": false }.`,
+  );
+}
+
+/**
  * Open workspaces, kept in memory. The disk cache (ROADMAP_MCP §3.3, M1.2)
  * plugs in here: `open` reuses it, `listCached` enumerates it.
  */
@@ -287,10 +311,15 @@ export class WorkspaceStore {
       }
     }
 
-    const result = await withTimeout(
-      this.deps.webcrack(loaded.code, toWebcrackOptions(webcrackFlags)),
-      this.config.timeoutMs,
-    );
+    let result: Awaited<ReturnType<StoreDeps['webcrack']>>;
+    try {
+      result = await withTimeout(
+        this.deps.webcrack(loaded.code, toWebcrackOptions(webcrackFlags)),
+        this.config.timeoutMs,
+      );
+    } catch (error) {
+      throw toActionableOpenError(error);
+    }
     await progress(0.5, 'deobfuscated');
 
     const modules = new Map<string, ModuleEntry>();
@@ -337,11 +366,17 @@ export class WorkspaceStore {
     }
     await progress(0.85, 'modules tagged');
 
-    const detect = this.deps.detectTechniques ?? detectTechniques;
+    // D7 adds an optional 4th `opts?: { deobfuscated?: boolean }` param to
+    // `detectTechniques` in parallel: call through an untyped wrapper so this
+    // compiles (and runs) with or without it.
+    const detect = (this.deps.detectTechniques ?? detectTechniques) as (
+      ...args: unknown[]
+    ) => string[];
     const techniques = detect(
       loaded.code,
       [...modules.values()].map((module) => module.code),
       interpreters,
+      { deobfuscated: options.deobfuscate !== false },
     );
 
     const workspace: Workspace = {
@@ -355,6 +390,7 @@ export class WorkspaceStore {
       interpreters,
       annotations: [],
       stats: { openMs: Date.now() - startedAt, techniques },
+      findings: precomputeModuleFindings(modules.values()),
     };
     await progress(0.92, 'writing cache');
     await writeWorkspaceToCache(this.config, workspace, WEBCRACK_VERSION);
@@ -378,13 +414,23 @@ export class WorkspaceStore {
     const changed = [...new Set(changedPaths)];
     for (const path of changed) {
       const module = ws.modules.get(path);
-      if (!module) continue;
+      if (!module) {
+        // A removed module leaves no findings behind either.
+        if (ws.findings !== undefined) delete ws.findings[path];
+        continue;
+      }
       const analyzed = analyzeModule(path, module.code);
       ws.report[path] = analyzed.report;
       ws.interpreters = [
         ...ws.interpreters.filter((info) => info.module !== path),
         ...analyzed.interpreters,
       ];
+      // Refresh only the changed modules' precomputed findings; the rest of
+      // `ws.findings` is still valid. Workspaces without it (old caches)
+      // keep falling back to on-demand parsing.
+      if (ws.findings !== undefined) {
+        ws.findings[path] = collectModuleAstFindings(module);
+      }
     }
     ws.index = this.deps.buildIndex(ws.modules);
     for (const path of changed) {

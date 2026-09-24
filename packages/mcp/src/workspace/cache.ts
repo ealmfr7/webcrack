@@ -149,9 +149,10 @@ async function writeFileAtomic(file: string, content: string): Promise<void> {
 
 /**
  * Persist a workspace under `<cacheDir>/<id>/`: `meta.json`, `original.js`,
- * `modules/<path>`, `index.json`, `report.json`, `interpreters.json` and
- * `annotations.json`. Every module path is validated before anything is
- * written, so a hostile path leaves no partial cache behind.
+ * `modules/<path>`, `index.json`, `report.json`, `interpreters.json`,
+ * `annotations.json` and `findings.json` (precomputed AST findings; skipped
+ * when the workspace has none). Every module path is validated before
+ * anything is written, so a hostile path leaves no partial cache behind.
  */
 export async function writeWorkspaceToCache(
   config: Config,
@@ -206,12 +207,29 @@ export async function writeWorkspaceToCache(
     join(dir, 'annotations.json'),
     JSON.stringify(workspace.annotations),
   );
+  if (workspace.findings !== undefined) {
+    await writeFileAtomic(
+      join(dir, 'findings.json'),
+      JSON.stringify(workspace.findings),
+    );
+  }
+}
+
+/** Shape check for `findings.json`: an object of per-module finding arrays. */
+function isFindingsRecord(
+  value: unknown,
+): value is NonNullable<Workspace['findings']> {
+  return isRecord(value) && Object.values(value).every(Array.isArray);
 }
 
 /**
  * Load a workspace from `<cacheDir>/<id>/`. A corrupt or incomplete cache
  * (unreadable files, invalid JSON, unexpected shapes, id mismatch) is a
  * miss: it returns `undefined` so the caller rebuilds from scratch.
+ *
+ * Exception: a missing (or unreadable/invalid) `findings.json` is NOT a
+ * miss — caches written before precomputed findings existed have none, so
+ * the field is left `undefined` and queries parse on demand.
  */
 export async function readWorkspaceFromCache(
   config: Config,
@@ -256,6 +274,15 @@ export async function readWorkspaceFromCache(
         tags: item.tags,
       });
     }
+    let findings: Workspace['findings'];
+    try {
+      const raw: unknown = JSON.parse(
+        await readFile(join(dir, 'findings.json'), 'utf8'),
+      ) as unknown;
+      findings = isFindingsRecord(raw) ? raw : undefined;
+    } catch {
+      findings = undefined;
+    }
     return {
       id: meta.id,
       source: meta.source,
@@ -267,6 +294,7 @@ export async function readWorkspaceFromCache(
       interpreters: interpreters as Workspace['interpreters'],
       annotations: annotations as Workspace['annotations'],
       stats: meta.stats,
+      ...(findings === undefined ? {} : { findings }),
     };
   } catch {
     return undefined;
