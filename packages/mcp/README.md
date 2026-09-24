@@ -13,10 +13,16 @@ Requirements: Node.js 22 or 24 (see the main README for the `isolated-vm`
 note), `pnpm@11`.
 
 ```bash
-pnpm install && pnpm build
+pnpm install
+pnpm build
 ```
 
 This builds `packages/mcp/dist/index.js`, the stdio server entry point.
+Run it with:
+
+```bash
+node packages/mcp/dist/index.js
+```
 
 ## Connect a client
 
@@ -52,25 +58,25 @@ workspace is used. Every location is `module:line` and can be passed straight
 from one tool to the next. Lists are paginated (`limit`, default 30, max 500;
 `offset`, default 0).
 
-| Tool             | Purpose                                                                                                                                  | Key params                                                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wc_open`        | Load a file, URL or code snippet: deobfuscates, unpacks the bundle and indexes it once (results are cached)                              | `source`, `options` (`unpack`, `deobfuscate`, `unminify`, `jsx`, `mangle`, `renameHeuristics`), `refresh`                                                   |
-| `wc_workspaces`  | List opened and cached workspaces                                                                                                        | —                                                                                                                                                           |
-| `wc_map`         | Browse modules like a file tree (size, tags, entry point)                                                                                | `path`, `tag` (`network`, `auth`, `crypto`, `storage`, `dom`, `vm`, `vendor`), `sort`, `detail`, `limit`, `offset`                                          |
-| `wc_outline`     | List the symbols of one module with lines, params and ref counts                                                                         | `module`, `detail` (`concise`, `full`)                                                                                                                      |
-| `wc_search`      | Search the clean code                                                                                                                    | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
-| `wc_findings`    | Precomputed intel with `module:line` locations                                                                                           | `category` (`summary`, `endpoints`, `urls`, `secrets`, `regexes`, `interesting`, `sinks`, `storage`, `crypto`, `vm`), `module`, `reveal`, `limit`, `offset` |
-| `wc_read`        | Read code with line numbers (`module`, `module:line`, `module:start-end`, `module:symbol` or bare `symbol`)                              | `target`, `view` (`clean`, `raw`), `detail`, `context`, `column`                                                                                            |
-| `wc_goto`        | Jump to a symbol's definition (location, signature, first lines)                                                                         | `symbol`, `from` (`module:line` used for scope-accurate resolution)                                                                                         |
-| `wc_refs`        | Find where a symbol is used across modules                                                                                               | `symbol`, `direction` (`callers`, `callees`, `all`), `from`, `limit`, `offset`                                                                              |
-| `wc_graph`       | Module dependency graph or call graph around a root                                                                                      | `kind` (`modules`, `calls`), `root`, `depth` (default 2, max 6), `format` (`tree`, `json`, `dot`)                                                           |
-| `wc_diff`        | Compare two workspaces (added/removed/changed/renamed modules, findings deltas)                                                          | `a`, `b` (workspace ids), `detail`                                                                                                                          |
-| `wc_deobfuscate` | Re-run webcrack passes on a module, range or symbol (or evaluate an expression in the sandbox); `apply=true` saves it into the workspace | `target`, `passes`, `expression`, `apply`                                                                                                                   |
-| `wc_annotate`    | Rename a symbol (scope-aware, applied everywhere) and/or attach a note; persists across sessions                                         | `symbol` (`module:name`), `name`, `note`                                                                                                                    |
-| `wc_export`      | Write the reconstructed project to a directory                                                                                           | `dir` (must be inside the allowed roots), `include` (`code`, `report`, `notes`, `graph`), `overwrite`                                                       |
-| `wc_trace`       | Follow the flow of a value: where a URL/token is built and which function sends it (via refs + assignments)                              | `value`                                                                                                                                                     |
+| Tool             | Purpose                                                                                                                                                   | Key params                                                                                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wc_open`        | Load a file, URL or code snippet: deobfuscates, unpacks the bundle and indexes it once (results are cached); or reopen a cached workspace by its 8-hex id | `source` (path, URL, code or workspace id), `options` (`unpack`, `deobfuscate`, `unminify`, `jsx`, `mangle`, `renameHeuristics`), `refresh`                 |
+| `wc_workspaces`  | List opened and cached workspaces (pass a cached id back to `wc_open` to reopen it instantly)                                                             | —                                                                                                                                                           |
+| `wc_map`         | Browse modules like a file tree (size, tags, entry point)                                                                                                 | `path`, `tag` (`network`, `auth`, `crypto`, `storage`, `dom`, `vm`, `vendor`), `sort`, `detail`, `limit`, `offset`                                          |
+| `wc_outline`     | List the symbols of one module with lines, params and ref counts                                                                                          | `module`, `detail` (`concise`, `full`)                                                                                                                      |
+| `wc_search`      | Search the clean code                                                                                                                                     | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
+| `wc_findings`    | Precomputed intel with `module:line` locations                                                                                                            | `category` (`summary`, `endpoints`, `urls`, `secrets`, `regexes`, `interesting`, `sinks`, `storage`, `crypto`, `vm`), `module`, `reveal`, `limit`, `offset` |
+| `wc_read`        | Read code with line numbers (`module`, `module:line`, `module:start-end`, `module:symbol` or bare `symbol`)                                               | `target`, `view` (`clean`, `raw`), `context`, `column`                                                                                                      |
+| `wc_goto`        | Jump to a symbol's definition (location, signature, first lines)                                                                                          | `symbol`, `from` (`module:line` used for scope-accurate resolution)                                                                                         |
+| `wc_refs`        | Find where a symbol is used across modules                                                                                                                | `symbol`, `direction` (`callers`, `callees`, `all`), `from`, `limit`, `offset`                                                                              |
+| `wc_graph`       | Module dependency graph or call graph around a root                                                                                                       | `kind` (`modules`, `calls`), `root`, `depth` (default 2, max 6), `format` (`tree`, `json`, `dot`)                                                           |
+| `wc_diff`        | Compare two workspaces (added/removed/changed/renamed modules, findings deltas)                                                                           | `a`, `b` (workspace ids), `detail`                                                                                                                          |
+| `wc_deobfuscate` | Re-run webcrack passes on a module, range or symbol (or evaluate an expression in the sandbox); `apply=true` saves it into the workspace                  | `target`, `passes`, `expression`, `apply`                                                                                                                   |
+| `wc_annotate`    | Rename a symbol (scope-aware, applied everywhere) and/or attach a note; persists across sessions                                                          | `symbol` (`module:name`), `name`, `note`, `from` (`module:line` to resolve the name exactly)                                                                |
+| `wc_export`      | Write the reconstructed project to a directory                                                                                                            | `dir` (must be inside the allowed roots), `include` (`code`, `report`, `notes`, `graph`), `overwrite`                                                       |
+| `wc_trace`       | Follow the flow of a value: where a URL/token is built and which function sends it (via refs + assignments)                                               | `value`, `direction` (`backward`, `forward`, `both`), `depth` (default 4, max 8), `maxSteps` (default 40, max 200)                                          |
 
-`wc_trace` is landing with M3.4; every other tool above is implemented.
+Every tool above is implemented.
 
 ## Resources
 
@@ -84,8 +90,10 @@ For clients that prefer attaching resources over calling tools:
 ## Prompt: `audit`
 
 The `audit` prompt runs the guided reverse-engineering workflow:
-`source` (file path, URL or code; required) and `goal` (e.g. `"how requests
-are signed"`; optional, defaults to a security-oriented overview). It walks
+`source` (file path, URL or code; required), `goal` (e.g. `"how requests
+are signed"`; optional, defaults to a security-oriented overview) and
+`focus` (`network` | `auth` | `crypto` | `storage` | `obfuscation` | `all`;
+optional, defaults to `all`). It walks
 the agent through open → findings → map → investigate
 (read/goto/refs/deobfuscate/annotate) → a final report citing `module:line`
 for every claim.
@@ -173,7 +181,8 @@ sessions by hand (or via the agent driving both).
 
 `evals/` measures whether a real agent solves reverse-engineering tasks with
 these tools (target: ≥ 80 % solved, median ≤ 12 tool calls). They need Node ≥
-22.6 for `--experimental-strip-types` (e.g. `nvm use 24`) and a built server.
+22.6 for `--experimental-strip-types` (e.g. `nvm use 24`) and a built server
+(`pnpm build`).
 From the repo root:
 
 ```sh
@@ -182,7 +191,9 @@ node --experimental-strip-types packages/mcp/evals/run.ts [--only <id>] [--concu
 ```
 
 `--dry-run` validates the tasks and checks the samples without spawning
-`claude`. A real run costs money (one Claude session per task); results
+`claude`: it also starts the built server (`packages/mcp/dist/index.js`) and
+lists its tools.
+A real run costs money (one Claude session per task); results
 accumulate in `evals/results/` and `evals/RESULTS.md`. See
 [`evals/README.md`](evals/README.md) for the task format.
 
