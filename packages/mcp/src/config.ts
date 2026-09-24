@@ -27,11 +27,18 @@ function defaultCacheDir(): string {
  * is missing or empty. Anything else that is not all digits (no signs, no
  * decimals, no suffixes) or that is zero throws an Error naming the variable.
  */
+/**
+ * Maximum timeout in milliseconds: values above this overflow libuv/Node
+ * `setTimeout` to about 1ms (2^31 - 1, the max signed 32-bit integer).
+ */
+export const MAX_TIMEOUT_MS = 2147483647;
+
 function parsePositiveInt(
   name: string,
   raw: string | undefined,
   fallback: number,
   unit: string,
+  max?: number,
 ): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const text = raw.trim();
@@ -41,7 +48,11 @@ function parsePositiveInt(
     );
   }
   const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    (max !== undefined && value > max)
+  ) {
     throw new Error(
       `Invalid ${name}="${raw}": expected a positive integer (${unit}). Default: ${fallback}.`,
     );
@@ -101,7 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const cacheDir =
     cacheRaw === undefined || cacheRaw.trim() === ''
       ? defaultCacheDir()
-      : cacheRaw;
+      : resolve(cacheRaw.trim());
 
   return {
     roots: roots.length > 0 ? roots : [process.cwd()],
@@ -112,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.WEBCRACK_MCP_TIMEOUT_MS,
       DEFAULT_TIMEOUT_MS,
       'milliseconds',
+      MAX_TIMEOUT_MS,
     ),
     outputBudget: parsePositiveInt(
       'WEBCRACK_MCP_OUTPUT_BUDGET',
