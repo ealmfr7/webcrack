@@ -187,7 +187,9 @@ export const exportWorkspace = defineTool({
     if (include.includes('graph')) {
       const dot = renderDot(
         'modules',
-        buildModulesGraph(ws, undefined, Number.MAX_SAFE_INTEGER),
+        buildModulesGraph(ws, undefined, Number.MAX_SAFE_INTEGER, {
+          uncapped: true,
+        }),
       );
       await writeChecked(dir, 'modules.dot', `${dot}\n`);
       written.push('modules.dot');

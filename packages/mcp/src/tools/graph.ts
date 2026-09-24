@@ -40,14 +40,20 @@ function newGraph(rootId: string): BuiltGraph {
   };
 }
 
-function addNode(graph: BuiltGraph, node: GraphNode): boolean {
-  if (graph.nodes.has(node.id)) return true;
-  if (graph.nodes.size >= MAX_NODES) {
+type AddNodeResult = 'added' | 'exists' | 'capped';
+
+function addNode(
+  graph: BuiltGraph,
+  node: GraphNode,
+  opts?: { uncapped?: boolean },
+): AddNodeResult {
+  if (graph.nodes.has(node.id)) return 'exists';
+  if (!opts?.uncapped && graph.nodes.size >= MAX_NODES) {
     graph.capped = true;
-    return false;
+    return 'capped';
   }
   graph.nodes.set(node.id, node);
-  return true;
+  return 'added';
 }
 
 function addEdge(graph: BuiltGraph, from: string, to: string): void {
@@ -80,19 +86,42 @@ export function buildModulesGraph(
   ws: Workspace,
   root: string | undefined,
   depth: number,
+  opts?: { uncapped?: boolean },
 ): BuiltGraph {
   const rootPath =
     root === undefined ? defaultModuleRoot(ws) : resolveModule(ws, root).path;
   const graph = newGraph(rootPath);
-  addNode(graph, { id: rootPath, label: rootPath, module: rootPath });
-  const queue: { id: string; depth: number }[] = [{ id: rootPath, depth: 0 }];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    if (current.depth >= depth) continue;
-    for (const dep of ws.index.imports[current.id] ?? []) {
-      if (addNode(graph, { id: dep, label: dep, module: dep })) {
+  if (opts?.uncapped) {
+    // Full module graph: every module and every import edge, no cap and no
+    // reachability limit. Used by wc_export's modules.dot.
+    for (const path of ws.modules.keys()) {
+      addNode(graph, { id: path, label: path, module: path }, opts);
+    }
+    for (const [from, deps] of Object.entries(ws.index.imports)) {
+      if (!graph.nodes.has(from)) {
+        addNode(graph, { id: from, label: from, module: from }, opts);
+      }
+      for (const dep of deps) {
+        if (!graph.nodes.has(dep)) {
+          addNode(graph, { id: dep, label: dep, module: dep }, opts);
+        }
+        addEdge(graph, from, dep);
+      }
+    }
+  } else {
+    addNode(graph, { id: rootPath, label: rootPath, module: rootPath });
+    const queue: { id: string; depth: number }[] = [{ id: rootPath, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current.depth >= depth) continue;
+      for (const dep of ws.index.imports[current.id] ?? []) {
+        const added = addNode(graph, { id: dep, label: dep, module: dep });
+        if (added === 'capped') continue;
+        // Edges to already-seen nodes are still recorded (cycle edges);
+        // only newly added nodes are queued, so cycles terminate.
         addEdge(graph, current.id, dep);
-        queue.push({ id: dep, depth: current.depth + 1 });
+        if (added === 'added')
+          queue.push({ id: dep, depth: current.depth + 1 });
       }
     }
   }
@@ -170,18 +199,20 @@ export function buildCallsGraph(
       const id = target ? nodeId(target) : call.callee;
       const from = nodeId(current.symbol);
       if (target) {
-        if (
-          addNode(graph, {
-            id,
-            label: id,
-            module: target.module,
-            line: target.line,
-          })
-        ) {
-          addEdge(graph, from, id);
+        const added = addNode(graph, {
+          id,
+          label: id,
+          module: target.module,
+          line: target.line,
+        });
+        if (added === 'capped') continue;
+        // Edges to already-seen symbols are still recorded (cycle edges);
+        // only newly added symbols are queued, so cycles terminate.
+        addEdge(graph, from, id);
+        if (added === 'added') {
           queue.push({ symbol: target, depth: current.depth + 1 });
         }
-      } else if (addNode(graph, { id, label: id })) {
+      } else if (addNode(graph, { id, label: id }) !== 'capped') {
         // Unresolved leaf (a global or `*.x` member call), deduped.
         addEdge(graph, from, id);
       }
@@ -282,10 +313,16 @@ export const graph = defineTool({
     const cappedNote = built.capped
       ? `\nShowing the first ${MAX_NODES} nodes (capped). Narrow with root/depth.`
       : '';
+    // `wc_refs` needs a symbol, so for a module root it always errors;
+    // point at the module outline and the workspace map instead.
+    const next =
+      args.kind === 'modules'
+        ? [`wc_outline ${built.rootId}`, 'wc_map']
+        : [`wc_read ${built.rootId}`, `wc_refs ${built.rootId}`];
     return Promise.resolve(
       textResult(`${header}\n${body}${cappedNote}`, {
         budget: ctx.config.outputBudget,
-        next: [`wc_read ${built.rootId}`, `wc_refs ${built.rootId}`],
+        next,
       }),
     );
   },

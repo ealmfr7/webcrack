@@ -200,6 +200,97 @@ describe('wc_export', () => {
     ).toMatchObject({ source: { label: '<fixture>' } });
   });
 
+  test(
+    'a module cycle with include graph finishes quickly',
+    { timeout: 15000 },
+    async () => {
+      const root = await makeTemp();
+      const ws = fixtureWorkspace();
+      ws.modules.set('src/c3.js', {
+        path: 'src/c3.js',
+        bundleId: 'c3',
+        isEntry: false,
+        code: '',
+        tags: [],
+      });
+      ws.modules.set('src/c4.js', {
+        path: 'src/c4.js',
+        bundleId: 'c4',
+        isEntry: false,
+        code: '',
+        tags: [],
+      });
+      ws.index.imports['src/c3.js'] = ['src/c4.js'];
+      ws.index.imports['src/c4.js'] = ['src/c3.js'];
+      const { call } = await connectAt(root, ws);
+      const out = join(root, 'out');
+
+      const text = await call('wc_export', {
+        workspace: 'fixture1',
+        dir: out,
+        include: ['graph'],
+      });
+      expect(text).toContain('modules.dot');
+      const dot = await readFile(join(out, 'modules.dot'), 'utf8');
+      expect(dot).toContain('"src/c3.js" -> "src/c4.js";');
+      expect(dot).toContain('"src/c4.js" -> "src/c3.js";');
+    },
+  );
+
+  test('modules.dot holds every module and import edge, uncapped', async () => {
+    const root = await makeTemp();
+    const ws = fixtureWorkspace();
+    // 250 fan-out modules plus one unreachable island: all must appear.
+    for (let i = 0; i < 250; i++) {
+      const path = `src/fan${i}.js`;
+      ws.modules.set(path, {
+        path,
+        bundleId: `fan${i}`,
+        isEntry: false,
+        code: '',
+        tags: [],
+      });
+      ws.index.imports['src/api.js']?.push(path);
+      ws.index.imports[path] = [];
+    }
+    ws.modules.set('src/island.js', {
+      path: 'src/island.js',
+      bundleId: 'island',
+      isEntry: false,
+      code: '',
+      tags: [],
+    });
+    ws.index.imports['src/island.js'] = [];
+    const { call } = await connectAt(root, ws);
+    const out = join(root, 'out');
+
+    await call('wc_export', {
+      workspace: 'fixture1',
+      dir: out,
+      include: ['graph'],
+    });
+    const dot = await readFile(join(out, 'modules.dot'), 'utf8');
+    expect(dot).not.toContain('capped');
+    const nodes = new Set<string>();
+    let edges = 0;
+    const id = '((?:[^"\\\\]|\\\\.)*)';
+    for (const line of dot.split('\n')) {
+      const edge = new RegExp(`^  "${id}" -> "${id}";$`).exec(line);
+      if (edge) {
+        edges++;
+        continue;
+      }
+      const node = new RegExp(`^  "${id}";$`).exec(line);
+      if (node) nodes.add(node[1]);
+    }
+    // 2 fixture modules + 250 fan-out + 1 unreachable island.
+    expect(nodes.size).toBe(253);
+    expect(nodes.has('src/island.js')).toBe(true);
+    expect(dot).toContain('"src/api.js" -> "src/sign.js";');
+    // 1 fixture edge + 250 fan-out edges.
+    expect(edges).toBe(251);
+  });
+
   test('a module path traversal is sanitized', async () => {
     const root = await makeTemp();
     const ws = fixtureWorkspace();

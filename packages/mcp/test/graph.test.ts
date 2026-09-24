@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { buildModulesGraph } from '../src/tools/graph';
 import type { Workspace } from '../src/workspace/types';
 import { connect, fixtureWorkspace } from './helpers';
 
@@ -49,7 +50,7 @@ describe('wc_graph modules', () => {
     expect(text).toContain('modules graph from src/api.js');
     expect(text).toContain('src/api.js');
     expect(text).toContain('src/sign.js');
-    expect(text).toMatch(/Next: wc_read src\/api\.js · wc_refs src\/api\.js/);
+    expect(text).toMatch(/Next: wc_outline src\/api\.js · wc_map/);
   });
 
   test('root accepts a bundle id', async () => {
@@ -137,6 +138,83 @@ describe('wc_graph modules', () => {
       expect(graph.nodes.has(edge.to)).toBe(true);
     }
   });
+
+  test(
+    'a module cycle terminates and keeps the back edge',
+    { timeout: 5000 },
+    async () => {
+      const ws = fixtureWorkspace();
+      for (const [path, id] of [
+        ['src/c3.js', 'c3'],
+        ['src/c4.js', 'c4'],
+      ] as const) {
+        ws.modules.set(path, {
+          path,
+          bundleId: id,
+          isEntry: false,
+          code: '',
+          tags: [],
+        });
+      }
+      ws.index.imports['src/c3.js'] = ['src/c4.js'];
+      ws.index.imports['src/c4.js'] = ['src/c3.js'];
+      const graph = buildModulesGraph(ws, 'src/c3.js', Number.MAX_SAFE_INTEGER);
+      expect(graph.nodes.size).toBe(2);
+      expect(graph.edges).toContainEqual({
+        from: 'src/c3.js',
+        to: 'src/c4.js',
+      });
+      expect(graph.edges).toContainEqual({
+        from: 'src/c4.js',
+        to: 'src/c3.js',
+      });
+      const { call } = await connect(ws);
+      const text = await call('wc_graph', {
+        kind: 'modules',
+        root: 'src/c3.js',
+        depth: 6,
+      });
+      expect(text).toContain('↺');
+    },
+  );
+
+  test(
+    'a 30-node complete digraph at depth 6 finishes with all nodes and edges',
+    { timeout: 10000 },
+    async () => {
+      const ws = fixtureWorkspace();
+      const ids = Array.from({ length: 30 }, (_, i) => `src/dense${i}.js`);
+      for (const id of ids) {
+        ws.modules.set(id, {
+          path: id,
+          bundleId: id,
+          isEntry: false,
+          code: '',
+          tags: [],
+        });
+        ws.index.imports[id] = ids.filter((other) => other !== id);
+      }
+      const start = Date.now();
+      const graph = buildModulesGraph(ws, ids[0], 6);
+      expect(Date.now() - start).toBeLessThan(5000);
+      expect(graph.nodes.size).toBe(30);
+      expect(graph.edges).toHaveLength(30 * 29);
+      const { call } = await connect(ws);
+      const text = await call('wc_graph', {
+        kind: 'modules',
+        root: ids[0],
+        format: 'dot',
+        depth: 6,
+      });
+      // The dot body is cut by the output budget on 870 edges, so the
+      // exact edge count is asserted on the builder above; here the tool
+      // must return promptly with the full 30-node header.
+      expect(text).toContain('(depth 6, 30 nodes)');
+      const dot = dotGraph(text);
+      expect(dot.nodes.size).toBe(30);
+      expect(dot.edges.length).toBeGreaterThan(30);
+    },
+  );
 });
 
 describe('wc_graph calls', () => {
