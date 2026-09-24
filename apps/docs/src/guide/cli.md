@@ -98,8 +98,9 @@ bundle (`bundle.json` plus modules) is saved to the output directory, while
 the per-input files (`deobfuscated.js`, and `report.json`/`graph.*`/
 `trace.diff`/`deobfuscated.js.map` when the matching flags are enabled) are
 saved under `<output>/<basename>/` directories named after each input file.
-Warnings (ignored inputs, duplicate module ids) and unresolved cross-chunk
-references are printed to stderr.
+When several inputs share the same base file name, the later directories get
+`-2`, `-3`, … suffixes. Warnings (ignored inputs, duplicate module ids) and
+unresolved cross-chunk references are printed to stderr.
 
 ## LLM-based renaming
 
@@ -117,7 +118,23 @@ for each batch:
 webcrack bundle.js -o output --llm-rename-command "llm-rename" --llm-timeout 60000
 ```
 
-The renaming also applies to the extracted bundle modules.
+Exactly which outputs are renamed depends on the inputs and whether `-o`
+is used:
+
+- Without `-o`, the code printed to stdout is the renamed code.
+- With `-o` and a single input containing a bundle, the extracted module
+  files are renamed; `deobfuscated.js` is not.
+- With `-o` and a single input without a bundle, `deobfuscated.js` is
+  renamed.
+- With multiple inputs and a merged bundle, the merged module files are
+  renamed; each per-input `<output>/<basename>/deobfuscated.js` is not.
+- With multiple inputs and no bundle, each per-input
+  `<output>/<basename>/deobfuscated.js` is renamed.
+
+`--source-map` cannot be combined with `--llm-rename-command`: the CLI exits
+with an error. `--llm-timeout <ms>` must be an integer between `1` and
+`2147483647` ms. The value is parsed with `Number()`, so `1e4` is accepted as
+`10000` while a value like `10s` is rejected.
 
 ## Invoke from other programming languages
 
