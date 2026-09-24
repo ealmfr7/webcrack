@@ -5,9 +5,13 @@ import { findAnnotation } from '../workspace/annotations';
 import type { Annotation, SymbolEntry } from '../workspace/types';
 import { defineTool, pagination, readOnly, workspaceArg } from './define';
 
-function annotationSuffix(annotation: Annotation): string {
+function annotationSuffix(annotation: Annotation, currentName: string): string {
   const parts: string[] = [];
-  if (annotation.rename) parts.push(`renamed to ${annotation.rename}`);
+  if (annotation.originalName && annotation.originalName !== currentName) {
+    parts.push(`originally ${annotation.originalName}`);
+  } else if (annotation.rename) {
+    parts.push(`renamed to ${annotation.rename}`);
+  }
   if (annotation.note) parts.push(`note: ${annotation.note}`);
   return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
 }
@@ -42,7 +46,7 @@ function formatSymbol(
     head = `${range} variable ${symbol.name}`;
   }
   const exported = symbol.exported ? ' [exported]' : '';
-  const suffix = annotation ? annotationSuffix(annotation) : '';
+  const suffix = annotation ? annotationSuffix(annotation, symbol.name) : '';
   return `${head}${exported} · refs: ${symbol.refCount}${suffix}`;
 }
 

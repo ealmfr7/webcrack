@@ -96,8 +96,44 @@ describe('wc_outline', () => {
     const { call } = await connect(ws);
     const text = await call('wc_outline', { module: 'src/api.js' });
     expect(text).toContain('function checkLogin(user, pass)');
-    expect(text).toContain('renamed to checkLogin');
+    expect(text).toContain('originally login');
+    expect(text).not.toContain('renamed to checkLogin');
     expect(text).toContain('handles auth');
+  });
+
+  test('a double rename shows the first name as originally', async () => {
+    const ws = fixtureWorkspace();
+    ws.modules.set('3.js', {
+      path: '3.js',
+      bundleId: '3',
+      isEntry: false,
+      code: 'export function deriveKey2() {}\n',
+      tags: [],
+    });
+    ws.index.symbols.push({
+      module: '3.js',
+      name: 'deriveKey2',
+      kind: 'function',
+      line: 1,
+      endLine: 1,
+      params: [],
+      exported: true,
+      refCount: 0,
+    });
+    ws.index.imports['3.js'] = [];
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: '3.js:deriveKey2',
+      rename: 'deriveKey2',
+      originalName: 'computeKey',
+      note: 'key derivation',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_outline', { module: '3.js' });
+    expect(text).toContain('function deriveKey2()');
+    expect(text).toContain('originally computeKey');
+    expect(text).not.toContain('renamed to deriveKey2');
+    expect(text).toContain('key derivation');
   });
 
   test('a pre-rekey entry still shows on the new name via its rename', async () => {

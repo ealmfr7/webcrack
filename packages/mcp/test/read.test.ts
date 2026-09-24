@@ -123,8 +123,44 @@ describe('wc_read clean', () => {
     const { call } = await connect(ws);
     const text = await call('wc_read', { target: 'src/api.js:checkLogin' });
     expect(text).toContain(
-      'Note on checkLogin: renamed to checkLogin · handles auth',
+      'Note on checkLogin: originally login · handles auth',
     );
+    expect(text).not.toContain('renamed to checkLogin');
+  });
+
+  test('a double rename shows the first name as originally', async () => {
+    const ws = fixtureWorkspace();
+    ws.modules.set('3.js', {
+      path: '3.js',
+      bundleId: '3',
+      isEntry: false,
+      code: 'export function deriveKey2() {}\n',
+      tags: [],
+    });
+    ws.index.symbols.push({
+      module: '3.js',
+      name: 'deriveKey2',
+      kind: 'function',
+      line: 1,
+      endLine: 1,
+      params: [],
+      exported: true,
+      refCount: 0,
+    });
+    ws.index.imports['3.js'] = [];
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: '3.js:deriveKey2',
+      rename: 'deriveKey2',
+      originalName: 'computeKey',
+      note: 'key derivation',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_read', { target: '3.js:deriveKey2' });
+    expect(text).toContain(
+      'Note on deriveKey2: originally computeKey · key derivation',
+    );
+    expect(text).not.toContain('renamed to deriveKey2');
   });
 
   test('an old name still reads the current symbol through the annotation', async () => {

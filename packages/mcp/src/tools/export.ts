@@ -68,6 +68,7 @@ function groupAnnotations(
       colon === -1 ? '(unknown)' : annotation.symbol.slice(0, colon);
     const name =
       colon === -1 ? annotation.symbol : annotation.symbol.slice(colon + 1);
+    const displayName = annotation.originalName ?? name;
     let text: string;
     if (annotation.rename && annotation.note) {
       text = ` → ${annotation.rename}: ${annotation.note}`;
@@ -79,7 +80,7 @@ function groupAnnotations(
       continue;
     }
     const list = byModule.get(module) ?? [];
-    list.push({ name, text });
+    list.push({ name: displayName, text });
     byModule.set(module, list);
   }
   return [...byModule.entries()]
