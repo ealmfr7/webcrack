@@ -1,10 +1,13 @@
 import generatorModule from '@babel/generator';
 import { parse } from '@babel/parser';
 import type * as t from '@babel/types';
+import { Command } from 'commander';
 import debug from 'debug';
 import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
-import { basename, extname, join, normalize } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   renameWithLLM,
   unpackChunks,
@@ -268,6 +271,161 @@ export async function applyLLMRename(
     );
   };
   return logEntries;
+}
+
+/**
+ * IO streams for {@link runCli}. `stdout`/`stderr` receive everything the
+ * CLI prints (including `--help`/`--version` and `program.error` output);
+ * `stdin` is read when no input file is given (defaults to
+ * `process.stdin`).
+ */
+export interface CliIO {
+  stdout: NodeJS.WritableStream;
+  stderr: NodeJS.WritableStream;
+  stdin?: NodeJS.ReadableStream;
+}
+
+interface RunCliOptions extends CLIFlags {
+  force?: boolean;
+  output?: string;
+  llmRenameCommand?: string;
+  llmTimeout?: number;
+}
+
+async function readStdin(stdin: NodeJS.ReadableStream): Promise<string> {
+  let data = '';
+  const withEncoding = stdin as NodeJS.ReadableStream &
+    Partial<Pick<NodeJS.ReadStream, 'setEncoding'>>;
+  withEncoding.setEncoding?.('utf8');
+  for await (const chunk of stdin)
+    data += typeof chunk === 'string' ? chunk : String(chunk);
+  return data;
+}
+
+/**
+ * Runs the `webcrack` CLI for the given argv (parsed with the default
+ * `from: 'node'`, i.e. `['node', 'webcrack', ...args]`).
+ *
+ * A fresh `Command` is built on every call so concurrent/sequential calls
+ * never share state (the test runner uses `--no-isolate`). Output goes to
+ * `io` instead of the process streams. Resolves on success; rejects with
+ * the `CommanderError` from `--help`/`--version` (exitCode 0) or
+ * `program.error` (exitCode 1), or with the raw error (e.g. a missing
+ * input file).
+ */
+export async function runCli(argv: string[], io: CliIO): Promise<void> {
+  const { version, description } = JSON.parse(
+    readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+      'utf8',
+    ),
+  ) as { version: string; description: string };
+
+  const program = new Command();
+  program
+    .exitOverride()
+    .configureOutput({
+      writeOut: (s) => io.stdout.write(s),
+      writeErr: (s) => io.stderr.write(s),
+    })
+    .version(version)
+    .description(description)
+    .option('-o, --output <path>', 'output directory for bundled files')
+    .option('-f, --force', 'overwrite output directory')
+    .option('-m, --mangle', 'mangle variable names')
+    .option('--no-jsx', 'do not decompile JSX')
+    .option('--no-unpack', 'do not extract modules from the bundle')
+    .option('--no-deobfuscate', 'do not deobfuscate the code')
+    .option('--no-unminify', 'do not unminify the code')
+    .option('--report', 'collect URLs, endpoints, secrets and other findings')
+    .option('--graph', 'build the module dependency and call graphs')
+    .option('--trace', 'record a per-stage transform trace')
+    .option('--source-map', 'emit a source map of the deobfuscated code')
+    .option(
+      '--rename-heuristics',
+      'rename short or mangled variable names using heuristics',
+    )
+    .option(
+      '--library-mappings',
+      'name modules matching known open-source libraries',
+    )
+    .option(
+      '--llm-rename-command <cmd>',
+      'external command for LLM-based renaming (batch JSON on stdin, {old:new} map on stdout)',
+    )
+    .option(
+      '--llm-timeout <ms>',
+      'timeout in ms for the LLM rename command',
+      (value) => Number(value),
+      30000,
+    )
+    .argument('[files...]', 'input files, defaults to stdin')
+    .action(async (files: string[]) => {
+      const {
+        output,
+        force,
+        llmRenameCommand,
+        llmTimeout = 30000,
+        ...flags
+      } = program.opts<RunCliOptions>();
+      const validationError = validateLLMFlags({
+        sourceMap: flags.sourceMap,
+        llmRenameCommand,
+        llmTimeout,
+      });
+      if (validationError !== undefined) program.error(validationError);
+      const options = toWebcrackOptions(flags);
+      const suggestNames =
+        llmRenameCommand === undefined
+          ? undefined
+          : commandSuggestNames(llmRenameCommand, llmTimeout);
+
+      if (files.length > 1 && !output) {
+        program.error('multiple input files require the --output option');
+      }
+
+      if (output) {
+        if (force || !existsSync(output)) {
+          await rm(output, { recursive: true, force: true });
+        } else {
+          program.error('output directory already exists');
+        }
+      }
+
+      if (files.length > 1) {
+        const inputs = await Promise.all(
+          files.map(async (file) => ({
+            name: file,
+            code: await readFile(file, 'utf8'),
+          })),
+        );
+        await runMultiInput(inputs, output!, flags, suggestNames);
+        return;
+      }
+
+      const code = await (files[0]
+        ? readFile(files[0], 'utf8')
+        : readStdin(io.stdin ?? process.stdin));
+      const result = await webcrack(code, options);
+      if (suggestNames)
+        await applyLLMRename(
+          result,
+          suggestNames,
+          output ? undefined : { target: 'code' },
+        );
+
+      if (output) {
+        await result.save(output);
+      } else {
+        io.stdout.write(result.code + '\n');
+        if (result.bundle) {
+          debug('webcrack:unpack')(
+            'Modules are not displayed in the terminal. Use the --output option to save them to a directory.',
+          );
+        }
+      }
+    });
+  await program.parseAsync(argv);
 }
 
 export interface MultiInputItem {
