@@ -368,9 +368,9 @@ pisarse:
       construye una URL/token y qué función lo envía) usando refs + asignaciones.
 - [x] **M3.5** `wc_diff a b`: comparar dos workspaces (módulos cambiados por
       hash estructural, endpoints/secrets nuevos o eliminados).
-- [ ] **M3.6** Integración con el MCP `browser-api`: documentar y probar el
+- [x] **M3.6** Integración con el MCP `browser-api`: documentar y probar el
       flujo `browser_trace_source` → `wc_open source=<código|url>`.
-- [ ] **M3.7** README del paquete, `.mcp.json` de ejemplo en la raíz y
+- [x] **M3.7** README del paquete, `.mcp.json` de ejemplo en la raíz y
       sección en `README.md` principal.
 
 ## 6. Seguridad
