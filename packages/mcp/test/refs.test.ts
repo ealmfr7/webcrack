@@ -1,6 +1,57 @@
-import { describe, expect, test } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, test } from 'vitest';
+import { loadConfig } from '../src/config';
+import { createServer } from '../src/server';
+import { buildIndex } from '../src/workspace/indexer';
+import { WorkspaceStore } from '../src/workspace/store';
 import type { Workspace } from '../src/workspace/types';
 import { connect, fixtureWorkspace } from './helpers';
+
+const cleanups: Array<() => Promise<void>> = [];
+afterAll(async () => {
+  for (const cleanup of cleanups) await cleanup();
+});
+
+/** Server over a workspace with the real indexer, writing cache to temp. */
+async function connectReal(ws: Workspace) {
+  const cacheDir = await mkdtemp(join(tmpdir(), 'wc-refs-rename-test-'));
+  cleanups.push(() => rm(cacheDir, { recursive: true, force: true }));
+  const config = loadConfig({
+    WEBCRACK_MCP_ROOTS: process.cwd(),
+    WEBCRACK_MCP_CACHE: cacheDir,
+  });
+  const store = new WorkspaceStore(config);
+  store.add(ws);
+
+  const server = createServer(config, store);
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  const call = async (
+    name: string,
+    args: Record<string, unknown> = {},
+  ): Promise<string> => {
+    const result = (await client.callTool({
+      name,
+      arguments: args,
+    })) as CallToolResult;
+    const text = result.content
+      .map((part) => (part.type === 'text' ? part.text : ''))
+      .join('\n');
+    if (result.isError) throw new Error(text);
+    return text;
+  };
+  return { call, ws };
+}
 
 /** Fixture plus a namespace-import module using `ns.sign(v)`. */
 function withNamespace(): Workspace {
@@ -191,6 +242,53 @@ describe('wc_refs callees', () => {
     });
     expect(after).toContain('src/api.js:5  fetchUser → src/sign.js:1');
     expect(after).not.toContain('fetchUser (unresolved)');
+  });
+
+  describe('wc_refs after wc_annotate rename', () => {
+    test('renaming an exported fn keeps cross-module refs resolving', async () => {
+      const ws = fixtureWorkspace();
+      // Real index so the rename commit reindexes real code.
+      ws.index = buildIndex(ws.modules);
+      const { call } = await connectReal(ws);
+
+      const before = await call('wc_refs', { symbol: 'sign' });
+      expect(before).toContain('src/api.js:5  call  in login');
+
+      // The rename keeps `sign` as a stable export alias
+      // (`export { renamedFn as sign }`); the importer is untouched.
+      await call('wc_annotate', {
+        symbol: 'src/sign.js:sign',
+        name: 'renamedFn',
+      });
+      expect(ws.modules.get('src/api.js')?.code).toContain(
+        'import { sign } from "./sign.js";',
+      );
+
+      // The exact bug symptom: the importer ref lost its defModule.
+      const importerRef = ws.index.refs.find(
+        (r) => r.module === 'src/api.js' && r.line === 5,
+      );
+      expect(importerRef).toMatchObject({
+        name: 'sign',
+        defModule: 'src/sign.js',
+        defLine: 1,
+      });
+      expect(
+        ws.index.symbols.find(
+          (s) => s.module === 'src/sign.js' && s.name === 'renamedFn',
+        ),
+      ).toMatchObject({ refCount: 2 });
+
+      // User-visible through the tools: the importer's call still resolves
+      // to the renamed definition, and the definition reads back.
+      const callees = await call('wc_refs', {
+        symbol: 'login',
+        direction: 'callees',
+      });
+      expect(callees).toContain('src/api.js:5  sign → src/sign.js:1');
+      const read = await call('wc_read', { target: 'src/sign.js:renamedFn' });
+      expect(read).toContain('function renamedFn');
+    });
   });
 
   test('a non-WcError during callee resolution propagates', async () => {

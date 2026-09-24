@@ -75,26 +75,31 @@ export function linkIndex(parts: Map<string, ModuleIndex>): WorkspaceIndex {
     for (const re of part.reexports) reexports.push({ ...re, module: mod });
   }
 
+  const lookups = buildLinkLookups(symbols, reexports);
+
+  const counts = new Map<string, number>();
+  const addCount = (module: string, line: number, name: string): void => {
+    const key = `${module}\0${line}\0${name}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  };
   for (const ref of refs) {
-    if (ref.defModule !== undefined) continue;
-    const target = resolveRef(
-      symbols,
-      reexports,
-      imports,
-      ref.module,
-      ref.name,
-    );
+    if (ref.defModule !== undefined) {
+      // Resolved inside its own module: keep the local name.
+      if (ref.defLine !== undefined) {
+        addCount(ref.defModule, ref.defLine, baseName(ref.name));
+      }
+      continue;
+    }
+    const target = resolveRef(lookups, imports, ref.module, ref.name);
     if (target) {
       ref.defModule = target.module;
       ref.defLine = target.line;
+      // Count toward the RESOLVED target symbol (module + name + line):
+      // the ref's local name may differ (import alias, export alias, or
+      // namespace member). The name stays in the key: `const a = 1, b = 2`
+      // share a line, so line alone would merge them.
+      addCount(target.module, target.line, target.name);
     }
-  }
-
-  const counts = new Map<string, number>();
-  for (const ref of refs) {
-    if (ref.defModule === undefined || ref.defLine === undefined) continue;
-    const key = `${ref.defModule}\0${ref.defLine}\0${baseName(ref.name)}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   for (const sym of symbols) {
     sym.refCount = counts.get(`${sym.module}\0${sym.line}\0${sym.name}`) ?? 0;
@@ -498,6 +503,19 @@ function collectStatement(state: WalkState, node: BodyNode): void {
             spec.local.type === 'Identifier'
           ) {
             markExported(state, spec.local.name);
+            // `export { local as exported }`: record a self-reexport alias
+            // so cross-module refs to the exported name resolve to the
+            // local binding (e.g. after a rename keeps the old export
+            // name). Same-name specifiers need no alias, and the module
+            // must not gain itself in `imports` (wc_graph shows imports).
+            const exported = exportNameOf(spec.exported);
+            if (exported !== spec.local.name) {
+              state.reexports.push({
+                name: exported,
+                importedName: spec.local.name,
+                from: state.module,
+              });
+            }
           }
         }
       }
@@ -1186,10 +1204,49 @@ function defaultName(path: NodePath): string | undefined {
     : undefined;
 }
 
-/** Follow one module's import of `name` to the exported symbol. */
-function resolveRef(
+/**
+ * Per-link lookup tables so resolution is O(refs + symbols) instead of
+ * O(refs × symbols).
+ */
+interface LinkLookups {
+  /** `module\0name` → every symbol with that name, in link order. */
+  byModuleName: Map<string, SymbolEntry[]>;
+  /** module → reexports recorded from that module, in order. */
+  reexportsByModule: Map<string, WorkspaceIndex['reexports']>;
+}
+
+function buildLinkLookups(
   symbols: SymbolEntry[],
   reexports: WorkspaceIndex['reexports'],
+): LinkLookups {
+  const byModuleName = new Map<string, SymbolEntry[]>();
+  for (const sym of symbols) {
+    const key = `${sym.module}\0${sym.name}`;
+    const list = byModuleName.get(key);
+    if (list) list.push(sym);
+    else byModuleName.set(key, [sym]);
+  }
+  const reexportsByModule = new Map<string, WorkspaceIndex['reexports']>();
+  for (const re of reexports) {
+    const list = reexportsByModule.get(re.module);
+    if (list) list.push(re);
+    else reexportsByModule.set(re.module, [re]);
+  }
+  return { byModuleName, reexportsByModule };
+}
+
+/** Every symbol with `name` in `modulePath`, in link order (maybe none). */
+function lookupName(
+  lookups: LinkLookups,
+  modulePath: string,
+  name: string,
+): SymbolEntry[] {
+  return lookups.byModuleName.get(`${modulePath}\0${name}`) ?? [];
+}
+
+/** Follow one module's import of `name` to the exported symbol. */
+function resolveRef(
+  lookups: LinkLookups,
   imports: Record<string, string[]>,
   fromModule: string,
   name: string,
@@ -1199,8 +1256,8 @@ function resolveRef(
     // Namespace member (`ns.sign`): only a `*` import root resolves.
     const root = name.slice(0, dot);
     const member = name.slice(dot + 1).split('.')[0];
-    const rootBinding = symbols.find(
-      (s) => s.module === fromModule && s.name === root && s.kind === 'import',
+    const rootBinding = lookupName(lookups, fromModule, root).find(
+      (s) => s.kind === 'import',
     );
     if (
       !rootBinding ||
@@ -1210,22 +1267,9 @@ function resolveRef(
     ) {
       return undefined;
     }
-    return resolveExportName(
-      symbols,
-      reexports,
-      rootBinding.from,
-      member,
-      new Set(),
-    );
+    return resolveExportName(lookups, rootBinding.from, member, new Set());
   }
-  return resolveImportRef(
-    symbols,
-    reexports,
-    imports,
-    fromModule,
-    name,
-    new Set(),
-  );
+  return resolveImportRef(lookups, imports, fromModule, name, new Set());
 }
 
 /**
@@ -1236,8 +1280,7 @@ function resolveRef(
  * and a namespace re-export (`export * as ns`) is not a named export.
  */
 function resolveImportRef(
-  symbols: SymbolEntry[],
-  reexports: WorkspaceIndex['reexports'],
+  lookups: LinkLookups,
   imports: Record<string, string[]>,
   fromModule: string,
   name: string,
@@ -1246,32 +1289,28 @@ function resolveImportRef(
   const key = `${fromModule}:${name}`;
   if (seen.has(key)) return undefined;
   seen.add(key);
-  const binding = symbols.find(
-    (s) => s.module === fromModule && s.name === name && s.kind === 'import',
+  const binding = lookupName(lookups, fromModule, name).find(
+    (s) => s.kind === 'import',
   );
   if (!binding) return undefined;
   if (binding.from !== undefined) {
     if (binding.importedName === '*') return undefined;
     return resolveExportName(
-      symbols,
-      reexports,
+      lookups,
       binding.from,
       binding.importedName ?? name,
       seen,
     );
   }
   for (const target of imports[fromModule] ?? []) {
-    const exported = symbols.find(
-      (s) => s.module === target && s.name === name && s.exported,
-    );
+    const exported = lookupName(lookups, target, name).find((s) => s.exported);
     if (exported) return exported;
   }
   return undefined;
 }
 
 function resolveExportName(
-  symbols: SymbolEntry[],
-  reexports: WorkspaceIndex['reexports'],
+  lookups: LinkLookups,
   modulePath: string,
   name: string,
   seen: Set<string>,
@@ -1279,24 +1318,18 @@ function resolveExportName(
   const key = `export:${modulePath}:${name}`;
   if (seen.has(key)) return undefined;
   seen.add(key);
-  const local = symbols.filter(
-    (s) => s.module === modulePath && s.name === name,
-  );
+  const local = lookupName(lookups, modulePath, name);
   const real = local.find((s) => s.kind !== 'import');
   if (real) return real;
-  for (const re of reexports) {
-    if (re.module !== modulePath) continue;
+  // Self-reexport aliases (`export { local as exported }`, where
+  // `from` is this same module) are followed by this same branch; the
+  // `seen` key above guards alias cycles.
+  for (const re of lookups.reexportsByModule.get(modulePath) ?? []) {
     if (re.name === name && re.importedName !== '*') {
-      const found = resolveExportName(
-        symbols,
-        reexports,
-        re.from,
-        re.importedName,
-        seen,
-      );
+      const found = resolveExportName(lookups, re.from, re.importedName, seen);
       if (found) return found;
     } else if (re.name === '*' && name !== 'default') {
-      const found = resolveExportName(symbols, reexports, re.from, name, seen);
+      const found = resolveExportName(lookups, re.from, name, seen);
       if (found) return found;
     }
   }
@@ -1306,8 +1339,7 @@ function resolveExportName(
   if (binding) {
     if (binding.importedName === '*') return undefined;
     return resolveExportName(
-      symbols,
-      reexports,
+      lookups,
       binding.from as string,
       binding.importedName ?? name,
       seen,

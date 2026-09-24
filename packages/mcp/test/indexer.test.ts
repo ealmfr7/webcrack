@@ -668,6 +668,98 @@ describe('linkIndex', () => {
   });
 });
 
+describe('export aliases', () => {
+  // What `wc_annotate` leaves behind after renaming an exported binding:
+  // the definition carries the new name while the export keeps the old
+  // one stable (`export { renamed as fn }`).
+  const files = {
+    'src/exp.js':
+      'function renamed() {}\nexport { renamed as fn };\nrenamed();\n',
+    'src/ns.js': 'import * as dep from "./exp.js";\ndep.fn();\n',
+    'src/user.js': 'import { fn } from "./exp.js";\nfn();\n',
+  };
+
+  function modulesOf(
+    entries: Record<string, string>,
+  ): Map<string, ModuleEntry> {
+    const modules = new Map<string, ModuleEntry>();
+    for (const [path, code] of Object.entries(entries)) {
+      modules.set(path, mod(path, code));
+    }
+    return modules;
+  }
+
+  test('local `export { local as exported }` records a self-reexport alias', () => {
+    const index = build(files);
+    expect(index.reexports).toEqual([
+      {
+        module: 'src/exp.js',
+        name: 'fn',
+        importedName: 'renamed',
+        from: 'src/exp.js',
+      },
+    ]);
+    // The alias is not an import: the module must not import itself.
+    expect(index.imports['src/exp.js']).toEqual([]);
+  });
+
+  test('namespace and named importers resolve through the alias', () => {
+    const index = build(files);
+    const def = index.symbols.find(
+      (s) => s.module === 'src/exp.js' && s.name === 'renamed',
+    );
+    expect(def).toMatchObject({ kind: 'function', exported: true, line: 1 });
+    for (const ref of index.refs) {
+      expect(ref).toMatchObject({ defModule: 'src/exp.js', defLine: 1 });
+    }
+    // Same-module refs (call + export-specifier read) plus both importers.
+    expect(def).toMatchObject({ refCount: 4 });
+  });
+
+  test('same-name specifiers record no alias', () => {
+    const index = build({
+      'src/e.js': 'function hidden() {}\nexport { hidden };\n',
+    });
+    expect(index.reexports).toEqual([]);
+  });
+
+  test('alias cycles terminate', () => {
+    const index = build({
+      'src/a.js': 'export { b as a };\nexport { a as b };\n',
+      'src/u.js': 'import { a } from "./a.js";\na();\n',
+    });
+    expect(index.refs.find((r) => r.name === 'a')).not.toHaveProperty(
+      'defModule',
+    );
+  });
+
+  test('incremental indexModule + linkIndex equals buildIndex', () => {
+    const modules = modulesOf(files);
+    const expected = buildIndex(modules);
+    const paths = [...modules.keys()];
+    const parts = new Map<string, ModuleIndex>();
+    for (const [path, entry] of modules) {
+      parts.set(path, indexModule(entry, paths));
+    }
+    expect(linkIndex(parts)).toEqual(expected);
+
+    // Simulate a rename commit: only the changed module is re-parsed.
+    const renamed = modulesOf({
+      ...files,
+      'src/exp.js':
+        'function renamedAgain() {}\nexport { renamedAgain as fn };\nrenamedAgain();\n',
+    });
+    const relinked = linkIndex(
+      new Map([
+        ['src/exp.js', indexModule(renamed.get('src/exp.js')!, paths)],
+        ['src/ns.js', parts.get('src/ns.js')!],
+        ['src/user.js', parts.get('src/user.js')!],
+      ]),
+    );
+    expect(relinked).toEqual(buildIndex(renamed));
+  });
+});
+
 describe('lines', () => {
   test('every entry points inside its module code', () => {
     const ws = fixtureWorkspace();
@@ -732,5 +824,86 @@ describe('performance', () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(index.symbols).toHaveLength(count);
     expect(index.calls).toHaveLength(count);
+  });
+
+  test('linkIndex stays linear on ~25k symbols x ~35k refs', () => {
+    // Hand-built parts: per-ref `symbols.find` scans (the old quadratic
+    // shape) would take minutes here; the lookup Maps link it in ms.
+    const MODULES = 200;
+    const PAD_VARS = 124;
+    const REFS_PER_MODULE = 176;
+    const parts = new Map<string, ModuleIndex>();
+    for (let i = 0; i < MODULES; i++) {
+      const path = `m/${i}.js`;
+      const next = `m/${(i + 1) % MODULES}.js`;
+      const symbols: ModuleIndex['symbols'] = [
+        {
+          module: path,
+          name: `fn${i}`,
+          kind: 'function',
+          line: 1,
+          endLine: 2,
+          params: [],
+          exported: true,
+          refCount: 0,
+        },
+      ];
+      for (let k = 0; k < PAD_VARS; k++) {
+        symbols.push({
+          module: path,
+          name: `v${i}_${k}`,
+          kind: 'variable',
+          line: 3 + k,
+          endLine: 3 + k,
+          exported: false,
+          refCount: 0,
+        });
+      }
+      symbols.push({
+        module: path,
+        name: `g${i}`,
+        kind: 'import',
+        line: 200,
+        endLine: 200,
+        exported: false,
+        refCount: 0,
+        importedName: `fn${(i + 1) % MODULES}`,
+        from: next,
+      });
+      const refs: ModuleIndex['refs'] = [];
+      for (let r = 0; r < REFS_PER_MODULE; r++) {
+        refs.push({
+          module: path,
+          line: 201 + r,
+          name: `g${i}`,
+          kind: 'call',
+        });
+      }
+      parts.set(path, {
+        symbols,
+        calls: [],
+        strings: [],
+        refs,
+        imports: [next],
+        reexports: [],
+      });
+    }
+    expect(
+      [...parts.values()].reduce((n, p) => n + p.symbols.length, 0),
+    ).toBeGreaterThan(25_000);
+    expect(
+      [...parts.values()].reduce((n, p) => n + p.refs.length, 0),
+    ).toBeGreaterThan(35_000);
+
+    const started = Date.now();
+    const linked = linkIndex(parts);
+    expect(Date.now() - started).toBeLessThan(2000);
+
+    // Every ref resolved, and each target counts all of its callers.
+    expect(linked.refs.every((r) => r.defModule !== undefined)).toBe(true);
+    const target = linked.symbols.find(
+      (s) => s.module === 'm/0.js' && s.name === 'fn0',
+    );
+    expect(target).toMatchObject({ refCount: REFS_PER_MODULE });
   });
 });
