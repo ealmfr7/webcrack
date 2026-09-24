@@ -130,7 +130,13 @@ function runCommand(command: string, input: string, timeoutMs: number) {
         fail(new Error(`LLM command exited with code ${code}${detail}`));
       }
     });
-    child.stdin.on('error', (error) => fail(error));
+    child.stdin.on('error', (error) => {
+      // The command may exit without reading stdin (e.g. `exit 3`): the
+      // write then fails with EPIPE. Ignore it so the `close` handler
+      // below reports the real exit code instead of "write EPIPE".
+      if ((error as NodeJS.ErrnoException).code === 'EPIPE') return;
+      fail(error);
+    });
     child.stdin.end(input);
   });
 }
@@ -177,18 +183,61 @@ export function commandSuggestNames(
 }
 
 /**
+ * Validates the `--llm-rename-command` / `--llm-timeout` / `--source-map`
+ * flag combination. Returns an error message when the combination is
+ * invalid, `undefined` when it is valid.
+ */
+export function validateLLMFlags({
+  sourceMap,
+  llmRenameCommand,
+  llmTimeout,
+}: {
+  sourceMap?: boolean;
+  llmRenameCommand?: string;
+  llmTimeout?: unknown;
+}): string | undefined {
+  if (sourceMap && llmRenameCommand !== undefined) {
+    return '--source-map cannot be used with --llm-rename-command';
+  }
+  if (llmTimeout !== undefined) {
+    const timeout =
+      typeof llmTimeout === 'string' ? Number(llmTimeout) : llmTimeout;
+    if (
+      typeof timeout !== 'number' ||
+      !Number.isInteger(timeout) ||
+      timeout <= 0
+    ) {
+      return '--llm-timeout must be a positive integer';
+    }
+  }
+  return undefined;
+}
+
+/**
  * Renames bindings in an already-produced {@link WebcrackResult} using
- * {@link renameWithLLM}: the top-level code is re-parsed, renamed and
- * regenerated, and — when a bundle exists — every module AST is renamed and
- * its code regenerated via `module.regenerateCode()`.
+ * {@link renameWithLLM}: when a bundle exists only every module AST is
+ * renamed and its code regenerated via `module.regenerateCode()` (the
+ * module code also appears in the top-level code, so renaming both would
+ * offer every binding to `suggestNames` twice); otherwise the top-level
+ * code is re-parsed, renamed and regenerated.
  *
- * `result.save()` is patched so the saved `deobfuscated.js` contains the
- * renamed code (`save` closes over the pre-rename output internally).
+ * `result.save()` is patched (in the no-bundle case only) so the saved
+ * `deobfuscated.js` contains the renamed code (`save` closes over the
+ * pre-rename output internally).
  */
 export async function applyLLMRename(
   result: WebcrackResult,
   suggestNames: SuggestNames,
 ): Promise<RenameLogEntry[]> {
+  if (result.bundle) {
+    const logEntries: RenameLogEntry[] = [];
+    for (const module of result.bundle.modules.values()) {
+      logEntries.push(...(await renameWithLLM(module.ast, { suggestNames })));
+      module.regenerateCode();
+    }
+    return logEntries;
+  }
+
   const ast = parse(result.code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
@@ -198,13 +247,6 @@ export async function applyLLMRename(
   const logEntries = await renameWithLLM(ast, { suggestNames });
   const renamedCode = generate(ast);
   (result as { code: string }).code = renamedCode;
-
-  if (result.bundle) {
-    for (const module of result.bundle.modules.values()) {
-      await renameWithLLM(module.ast, { suggestNames });
-      module.regenerateCode();
-    }
-  }
 
   const originalSave = result.save.bind(result);
   const hasMap = result.map !== undefined;
