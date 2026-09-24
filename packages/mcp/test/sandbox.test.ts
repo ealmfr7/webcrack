@@ -38,6 +38,22 @@ describe('evaluateInModule', () => {
     ).rejects.toThrowError(/timed out after 500ms/);
   });
 
+  test('a module ending in a line comment with no newline still evaluates', async () => {
+    const code = `function _0xd(i){return i * 2;}\n//# sourceMappingURL=x.map`;
+    await expect(evaluateInModule(code, '_0xd(21)', OPTS)).resolves.toBe('42');
+  });
+
+  test('a module starting with a hashbang still evaluates', async () => {
+    const code = `#!/usr/bin/env node\nfunction _0xd(i){return i + 1;}`;
+    await expect(evaluateInModule(code, '_0xd(41)', OPTS)).resolves.toBe('42');
+  });
+
+  test('a module ending inside an unterminated block comment still evaluates', async () => {
+    // sanitizeModuleCode closes the dangling comment, so the expression runs.
+    const code = `var x = 40;\n/* trailing comment never closed`;
+    await expect(evaluateInModule(code, 'x + 2', OPTS)).resolves.toBe('42');
+  });
+
   test('an injection attempt is rejected before anything runs', async () => {
     await expect(
       evaluateInModule('', '1)}); evil(', OPTS),

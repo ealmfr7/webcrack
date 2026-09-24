@@ -1,4 +1,4 @@
-import { parseExpression } from '@babel/parser';
+import { parse, parseExpression } from '@babel/parser';
 import { createNodeSandbox } from 'webcrack/analysis';
 import { WcError } from '../format/errors';
 
@@ -30,9 +30,10 @@ export async function evaluateInModule(
   opts: EvaluateInModuleOptions,
 ): Promise<string> {
   validateExpression(expression);
+  const safe = sanitizeModuleCode(code);
   const script = [
     'var module={exports:{}},exports=module.exports,require=function(){return {}},window=globalThis,self=globalThis;',
-    `try{${code}}catch(e){};`,
+    `try{\n${safe}\n}catch(e){};`,
     `(function(){try{var r=(${expression});return typeof r==='string'?r:(JSON.stringify(r)??String(r))}catch(e){return 'Error: '+e}})()`,
   ].join('');
   const factory = opts.sandboxFactory ?? createNodeSandbox;
@@ -51,6 +52,33 @@ export async function evaluateInModule(
     return `${text.slice(0, MAX_RESULT_CHARS)}\n...[truncated to ${MAX_RESULT_CHARS} characters]`;
   }
   return text;
+}
+
+/**
+ * Make module code safe to splice into the `try{...}catch(e){}` wrapper.
+ * Newlines around the code stop a trailing line comment (e.g. a
+ * `//# sourceMappingURL=` footer with no trailing newline) from commenting
+ * out the wrapper's closing brace. A leading hashbang is stripped so the
+ * code parses as ordinary JS. A trailing unterminated block comment is
+ * closed so it cannot swallow the rest of the wrapper; its content is inert,
+ * so the expression still runs.
+ */
+function sanitizeModuleCode(code: string): string {
+  const noHashbang = code.replace(/^\uFEFF?#!.*(?:\r\n|[\n\r])?/, '');
+  if (hasUnterminatedBlockComment(noHashbang)) return `${noHashbang}\n*/`;
+  return noHashbang;
+}
+
+/** True when the code ends inside a `/* ...` comment that never closes. */
+function hasUnterminatedBlockComment(code: string): boolean {
+  try {
+    parse(code, { sourceType: 'script' });
+    return false;
+  } catch (error) {
+    return (
+      error instanceof Error && /unterminated comment/i.test(error.message)
+    );
+  }
 }
 
 /**
