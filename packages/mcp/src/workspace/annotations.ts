@@ -3,7 +3,7 @@ import traverse from '@babel/traverse';
 import type { Binding, NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import { WcError } from '../format/errors';
-import type { SymbolEntry, Workspace } from './types';
+import type { Annotation, SymbolEntry, Workspace } from './types';
 
 interface Edit {
   start: number;
@@ -34,13 +34,22 @@ interface Edit {
  *   properties (only the value identifier is renamed).
  *
  * Returns the changed module paths (just the defining module: importers
- * keep referring to the stable export name, so they are untouched).
+ * keep referring to the stable export name, so they are untouched) plus
+ * the number of splices actually applied (`sites`), so callers never have
+ * to estimate it with a word count over the text (which would also match
+ * the name inside strings and comments).
  */
+export interface RenameResult {
+  changed: string[];
+  /** Number of source splices applied (unique, non-overlapping edits). */
+  sites: number;
+}
+
 export function renameSymbol(
   ws: Workspace,
   symbol: SymbolEntry,
   newName: string,
-): string[] {
+): RenameResult {
   if (!t.isValidIdentifier(newName)) {
     throw new WcError(
       `"${newName}" is not a valid JavaScript identifier. Pass a name like "hmacSign" (letters, digits, _ and $, not starting with a digit).`,
@@ -202,8 +211,35 @@ export function renameSymbol(
     // identifier covered by binding.identifier or a reference above.
   }
 
-  entry.code = applyEdits(entry.code, edits, exportAppendix);
-  return [entry.path];
+  const applied = applyEdits(entry.code, edits, exportAppendix);
+  entry.code = applied.code;
+  return { changed: [entry.path], sites: applied.sites };
+}
+
+/**
+ * Find the annotation for a binding, matching the current key
+ * (`module:name`) or an old name (`originalName`, or a previous `rename`
+ * kept by entries written before re-keying existed). There is only ever
+ * one entry per binding: renames re-key the entry in place.
+ *
+ * The exact current-key match wins over an old-name match, so a recycled
+ * name (another binding renamed onto a freed old name) still resolves to
+ * its own entry.
+ */
+export function findAnnotation(
+  annotations: Annotation[],
+  module: string,
+  name: string,
+): Annotation | undefined {
+  const key = `${module}:${name}`;
+  const direct = annotations.find((annotation) => annotation.symbol === key);
+  if (direct) return direct;
+  return annotations.find((annotation) => {
+    const colon = annotation.symbol.lastIndexOf(':');
+    if (colon === -1) return false;
+    if (annotation.symbol.slice(0, colon) !== module) return false;
+    return annotation.originalName === name || annotation.rename === name;
+  });
 }
 
 interface ExportedDeclaration {
@@ -258,9 +294,14 @@ function exportedDeclaration(
 /**
  * Splice edits into `code` from last to first so earlier ranges stay
  * valid, then append export-specifier lines (append-only: existing line
- * numbers never shift).
+ * numbers never shift). Reports the spliced code and how many unique
+ * splices were applied (the appended alias lines are not splices).
  */
-function applyEdits(code: string, edits: Edit[], appendix: string[]): string {
+function applyEdits(
+  code: string,
+  edits: Edit[],
+  appendix: string[],
+): { code: string; sites: number } {
   const seen = new Set<string>();
   const unique = edits.filter((edit) => {
     const key = `${edit.start}:${edit.end}`;
@@ -283,5 +324,5 @@ function applyEdits(code: string, edits: Edit[], appendix: string[]): string {
   for (const line of appendix) {
     out = out.endsWith('\n') ? `${out}${line}\n` : `${out}\n${line}\n`;
   }
-  return out;
+  return { code: out, sites: unique.length };
 }

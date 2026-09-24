@@ -106,6 +106,47 @@ describe('wc_read clean', () => {
     expect(text).toContain('src/api.js:2-9 (clean)');
   });
 
+  test('a re-keyed annotation shows on the current name', async () => {
+    const ws = fixtureWorkspace();
+    const login = ws.index.symbols.find(
+      (s) => s.module === 'src/api.js' && s.name === 'login',
+    );
+    expect(login).toBeDefined();
+    if (login) login.name = 'checkLogin';
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: 'src/api.js:checkLogin',
+      rename: 'checkLogin',
+      originalName: 'login',
+      note: 'handles auth',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_read', { target: 'src/api.js:checkLogin' });
+    expect(text).toContain(
+      'Note on checkLogin: renamed to checkLogin · handles auth',
+    );
+  });
+
+  test('an old name still reads the current symbol through the annotation', async () => {
+    const ws = fixtureWorkspace();
+    const login = ws.index.symbols.find(
+      (s) => s.module === 'src/api.js' && s.name === 'login',
+    );
+    expect(login).toBeDefined();
+    if (login) login.name = 'checkLogin';
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: 'src/api.js:checkLogin',
+      rename: 'checkLogin',
+      originalName: 'login',
+      note: 'handles auth',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_read', { target: 'src/api.js:login' });
+    expect(text).toContain('src/api.js:2-9 (clean)');
+    expect(text).toContain('handles auth');
+  });
+
   test('alias import is followed to its definition', async () => {
     const { call } = await connect(setup());
     const text = await call('wc_read', { target: 'src/alias.js:s' });
