@@ -222,15 +222,21 @@ export function validateLLMFlags({
  * offer every binding to `suggestNames` twice); otherwise the top-level
  * code is re-parsed, renamed and regenerated.
  *
- * `result.save()` is patched (in the no-bundle case only) so the saved
- * `deobfuscated.js` contains the renamed code (`save` closes over the
- * pre-rename output internally).
+ * Pass `options.target: 'code'` to rename the top-level `result.code`
+ * instead of the modules (used by the CLI when printing to stdout without
+ * `-o`, where only `result.code` is shown). The default `'modules'`
+ * preserves the bundle behavior above.
+ *
+ * `result.save()` is patched (in the no-bundle case, and in the bundle
+ * case with `target: 'code'`) so the saved `deobfuscated.js` contains the
+ * renamed code (`save` closes over the pre-rename output internally).
  */
 export async function applyLLMRename(
   result: WebcrackResult,
   suggestNames: SuggestNames,
+  options?: { target?: 'modules' | 'code' },
 ): Promise<RenameLogEntry[]> {
-  if (result.bundle) {
+  if (result.bundle && options?.target !== 'code') {
     const logEntries: RenameLogEntry[] = [];
     for (const module of result.bundle.modules.values()) {
       logEntries.push(...(await renameWithLLM(module.ast, { suggestNames })));
