@@ -92,8 +92,13 @@ function hasUnterminatedBlockComment(code: string): boolean {
  * stub (bare `import 'm'` is dropped), exports become `module.exports`
  * assignments (`export … from` is dropped), and `import.meta` becomes `{}`.
  * Exported `const`/`let`/`class` become `var` so the expression can see the
- * binding outside the wrapper's `try` block. Returns `undefined` when the
- * code has no ESM syntax or the rewrite fails; callers splice the raw code.
+ * binding outside the wrapper's `try` block. Non-exported top-level
+ * `const`/`let` become `var` and top-level `class X` becomes
+ * `var X = class X` for the same reason; only statements directly in
+ * `Program.body` are rewritten, so `for (let …)` headers and block-level
+ * declarations keep their semantics. Non-ESM (CJS/script) modules are not
+ * rewritten. Returns `undefined` when the code has no ESM syntax or the
+ * rewrite fails; callers splice the raw code.
  */
 function tryTranspileEsm(code: string): string | undefined {
   let ast: t.File;
@@ -192,19 +197,58 @@ function tryTranspileEsm(code: string): string | undefined {
         // Unreachable for plain JS (every declaration above is handled).
         path.remove();
       },
+      Program(path) {
+        // Hoist non-exported top-level bindings out of the wrapper's `try`
+        // so the expression can see them. Only direct Program.body
+        // statements are touched; nested and block-level declarations
+        // (including `for (let …)` headers) are left alone. This does not
+        // mark the module as ESM, so non-ESM modules are still returned
+        // as-is when no other visitor fires.
+        for (const statementPath of path.get('body')) {
+          if (statementPath.isVariableDeclaration()) {
+            statementPath.node.kind = 'var';
+          } else if (statementPath.isClassDeclaration()) {
+            const node = statementPath.node;
+            const id = node.id;
+            if (!id) continue;
+            statementPath.replaceWith(
+              stubBinding(
+                id.name,
+                t.classExpression(
+                  t.cloneNode(id),
+                  node.superClass,
+                  node.body,
+                  node.decorators ?? undefined,
+                ),
+              ),
+            );
+          }
+        }
+      },
       ExportDefaultDeclaration(path) {
         touched = true;
         const declaration = path.node.declaration;
         if (
-          (t.isFunctionDeclaration(declaration) ||
-            t.isClassDeclaration(declaration)) &&
-          declaration.id
+          t.isFunctionDeclaration(declaration) ||
+          t.isClassDeclaration(declaration)
         ) {
-          const id = declaration.id;
-          path.replaceWithMultiple([
-            declaration,
-            exportAssignment(t.identifier('default'), id.name),
-          ]);
+          if (declaration.id) {
+            const id = declaration.id;
+            path.replaceWithMultiple([
+              declaration,
+              exportAssignment(t.identifier('default'), id.name),
+            ]);
+            return;
+          }
+          // Anonymous `export default function () {}` /
+          // `export default class {}`: a declaration with no id cannot be
+          // assigned, so convert it to an expression first.
+          path.replaceWith(
+            exportAssignment(
+              t.identifier('default'),
+              t.toExpression(declaration),
+            ),
+          );
           return;
         }
         path.replaceWith(

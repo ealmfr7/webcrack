@@ -91,6 +91,44 @@ describe('evaluateInModule', () => {
     ).resolves.toBe('42');
   });
 
+  test('an anonymous default-exported function evaluates', async () => {
+    const code = [
+      'export default function () { return 42; }',
+      'export const z = 1;',
+    ].join('\n');
+    await expect(
+      evaluateInModule(code, 'module.exports.z', OPTS),
+    ).resolves.toBe('1');
+    await expect(
+      evaluateInModule(code, 'module.exports.default()', OPTS),
+    ).resolves.toBe('42');
+  });
+
+  test('an anonymous default-exported class evaluates', async () => {
+    const code = 'export default class { static v = 7 }';
+    await expect(
+      evaluateInModule(code, 'module.exports.default.v', OPTS),
+    ).resolves.toBe('7');
+  });
+
+  test('a non-exported top-level binding in an ESM module is visible', async () => {
+    const code = 'const hidden = 5; export const z = hidden + 1;';
+    await expect(evaluateInModule(code, 'hidden', OPTS)).resolves.toBe('5');
+    await expect(evaluateInModule(code, 'z', OPTS)).resolves.toBe('6');
+  });
+
+  test('a for-let inside a function keeps block scoping', async () => {
+    const code = [
+      'export const z = 0;',
+      'function f() {',
+      '  const fns = [];',
+      '  for (let i = 0; i < 3; i++) { fns.push(() => i); }',
+      '  return fns.map((g) => g()).join(",");',
+      '}',
+    ].join('\n');
+    await expect(evaluateInModule(code, 'f()', OPTS)).resolves.toBe('0,1,2');
+  });
+
   test('a real webcrack-unpacked ESM module evaluates', async () => {
     const source = await readFile(
       new URL('../../webcrack/test/corpus/webpack-5.js', import.meta.url),
