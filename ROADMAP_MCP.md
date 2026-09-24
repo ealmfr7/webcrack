@@ -305,7 +305,7 @@ pisarse:
 
 ### Fase 1: explorador núcleo (MVP)
 
-- [ ] **M1.1** `workspace/loader.ts`: `path` (dentro de roots, error
+- [x] **M1.1** `workspace/loader.ts`: `path` (dentro de roots, error
       accionable si no), `url` (solo http/https, límite de tamaño, timeout,
       sin seguir a `file:`), `code` literal. Detección automática del tipo.
 - [ ] **M1.2** `workspace/indexer.ts` + `store.ts` (+ módulo de caché):
