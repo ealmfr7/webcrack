@@ -1,13 +1,17 @@
+import { stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { WcError, suggest } from '../format/errors';
 import { textResult } from '../format/response';
+import { readWorkspaceFromCache } from '../workspace/cache';
 import {
   ALL_FINDING_CATEGORIES,
   summarizeFindings,
   type FindingCategory,
 } from '../workspace/findings';
-import { detectTechniques } from '../workspace/techniques';
 import type { ModuleTag, Workspace } from '../workspace/types';
-import { defineTool } from './define';
+import { defineTool, type ToolContext } from './define';
 
 /** Canonical tag order (same as `wc_map`). */
 const TAG_ORDER: ModuleTag[] = [
@@ -19,6 +23,9 @@ const TAG_ORDER: ModuleTag[] = [
   'vm',
   'vendor',
 ];
+
+/** A `wc_open` workspace id: the first 8 hex chars of the input hash. */
+const WORKSPACE_ID = /^[0-9a-f]{8}$/;
 
 export const open = defineTool({
   name: 'wc_open',
@@ -47,34 +54,60 @@ export const open = defineTool({
   },
   annotations: { readOnlyHint: false, openWorldHint: true },
   handler: async (args, ctx) => {
+    // A workspace id reopens the cached workspace directly, even from a new
+    // session whose store is empty. This runs before `loadSource`, which
+    // would otherwise mistake the id for literal code.
+    if (WORKSPACE_ID.test(args.source)) {
+      const hit = await readWorkspaceFromCache(ctx.config, args.source);
+      if (hit !== undefined) {
+        ctx.store.add(hit);
+        return renderOverview(hit, true, ctx);
+      }
+      // No cache entry: a file of that name keeps normal handling (it is a
+      // path, not an id). Anything else is an actionable error, not code.
+      const isFile = await stat(resolve(args.source)).then(
+        () => true,
+        () => false,
+      );
+      if (!isFile) {
+        const cached = await ctx.store.listCached();
+        throw new WcError(
+          `Unknown workspace "${args.source}": no cached workspace with that id. ` +
+            `Call wc_workspaces to list cached workspaces, then reopen one with wc_open <id>.`,
+          suggest(
+            args.source,
+            cached.map((summary) => summary.id),
+          ),
+        );
+      }
+    }
     const { workspace, cached } = await ctx.store.open(
       args.source,
       { ...args.options, refresh: args.refresh },
       ctx.progress,
     );
-    // The store leaves `techniques` empty (persisting them to the cache is
-    // a later follow-up); compute them in memory for the overview instead.
-    if (workspace.stats.techniques.length === 0) {
-      workspace.stats.techniques = detectTechniques(
-        workspace.original,
-        [...workspace.modules.values()].map((module) => module.code),
-        workspace.interpreters,
-      );
-    }
-    const { counts } = summarizeFindings(workspace);
-    const lines = [
-      headline(workspace, cached),
-      obfuscationLine(workspace),
-      ...entryLines(workspace),
-      findingsLine(counts),
-      ...topModulesLines(workspace),
-    ];
-    return textResult(lines.join('\n'), {
-      budget: ctx.config.outputBudget,
-      next: nextSteps(counts),
-    });
+    return renderOverview(workspace, cached, ctx);
   },
 });
+
+function renderOverview(
+  workspace: Workspace,
+  cached: boolean,
+  ctx: ToolContext,
+): CallToolResult {
+  const { counts } = summarizeFindings(workspace);
+  const lines = [
+    headline(workspace, cached),
+    obfuscationLine(workspace),
+    ...entryLines(workspace),
+    findingsLine(counts),
+    ...topModulesLines(workspace),
+  ];
+  return textResult(lines.join('\n'), {
+    budget: ctx.config.outputBudget,
+    next: nextSteps(counts),
+  });
+}
 
 export const workspaces = defineTool({
   name: 'wc_workspaces',
@@ -123,13 +156,18 @@ export const workspaces = defineTool({
         );
       }
     }
-    const label = unopened[0]?.label ?? opened[0]?.source.label;
+    // Suggest a reopenable workspace id for cached entries. Never a `<code>`
+    // label: it is not the code, so `wc_open "<code>"` would open a
+    // different workspace instead of the cached one.
+    const next =
+      unopened.length > 0
+        ? [`wc_open ${unopened[0].id}`]
+        : opened[0] !== undefined && opened[0].source.label !== '<code>'
+          ? [`wc_open ${JSON.stringify(opened[0].source.label)}`]
+          : ['wc_open'];
     return textResult(lines.join('\n'), {
       budget: ctx.config.outputBudget,
-      next:
-        label === undefined
-          ? ['wc_open']
-          : [`wc_open ${JSON.stringify(label)}`],
+      next,
     });
   },
 });
@@ -201,24 +239,37 @@ function findingsLine(counts: Record<FindingCategory, number>): string {
   return `Findings: ${parts.length > 0 ? parts.join(' · ') : 'none'}`;
 }
 
-function callsIn(workspace: Workspace, path: string): number {
-  return workspace.index.calls.filter((call) => call.module === path).length;
+/**
+ * Calls per module, counted once. The comparator below must not scan
+ * `ws.index.calls` per comparison (n·log n full scans on large bundles).
+ */
+function callCounts(workspace: Workspace): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const call of workspace.index.calls) {
+    counts.set(call.module, (counts.get(call.module) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** Up to 3 tagged modules, most call sites first, then largest. */
-function topForTag(workspace: Workspace, tag: ModuleTag): string[] {
+function topForTag(
+  workspace: Workspace,
+  tag: ModuleTag,
+  counts: Map<string, number>,
+): string[] {
+  const callsOf = (path: string): number => counts.get(path) ?? 0;
   const modules = [...workspace.modules.values()].filter((module) =>
     module.tags.includes(tag),
   );
   modules.sort((a, b) => {
-    const calls = callsIn(workspace, b.path) - callsIn(workspace, a.path);
+    const calls = callsOf(b.path) - callsOf(a.path);
     if (calls !== 0) return calls;
     return (
       Buffer.byteLength(b.code, 'utf8') - Buffer.byteLength(a.code, 'utf8')
     );
   });
   return modules.slice(0, 3).map((module) => {
-    const calls = callsIn(workspace, module.path);
+    const calls = callsOf(module.path);
     return calls > 0
       ? `${module.path} (${calls} call${calls === 1 ? '' : 's'})`
       : module.path;
@@ -230,12 +281,13 @@ function topModulesLines(workspace: Workspace): string[] {
     [...workspace.modules.values()].some((module) => module.tags.includes(tag)),
   );
   if (present.length === 0) return [];
+  const counts = callCounts(workspace);
   const width = Math.max(...present.map((tag) => tag.length));
   return [
     'Top modules by tag:',
     ...present.map(
       (tag) =>
-        `  ${tag.padEnd(width)}  ${topForTag(workspace, tag).join(' · ')}`,
+        `  ${tag.padEnd(width)}  ${topForTag(workspace, tag, counts).join(' · ')}`,
     ),
   ];
 }

@@ -237,6 +237,45 @@ describe('(removed) marking', () => {
   });
 });
 
+describe('deobfuscated flag', () => {
+  // `unminify` rewrites `while (!![])` to `while (true)` without removing
+  // anything: the shape is gone but the decoder calls remain.
+  const UNMINIFIED_ONLY = [
+    corpus('obfuscator-default.js').replace('while (!![])', 'while (true)'),
+  ];
+
+  test('deobfuscated:false never marks (removed)', () => {
+    expect(
+      detectTechniques(corpus('obfuscator-default.js'), PRETTY_CLEAN, [], {
+        deobfuscated: false,
+      }),
+    ).toEqual(['string-array (rotated)']);
+    expect(
+      detectTechniques(corpus('obfuscator-default.js'), UNMINIFIED_ONLY, [], {
+        deobfuscated: false,
+      }),
+    ).toEqual(['string-array (rotated)']);
+  });
+
+  test('decoder calls remaining in clean code are not (removed)', () => {
+    // Default opts: the rotator shape is gone, but push/shift still run.
+    expect(
+      detectTechniques(corpus('obfuscator-default.js'), UNMINIFIED_ONLY),
+    ).toEqual(['string-array (rotated)']);
+    expect(
+      detectTechniques(corpus('obfuscator-default.js'), UNMINIFIED_ONLY, [], {
+        deobfuscated: true,
+      }),
+    ).toEqual(['string-array (rotated)']);
+  });
+
+  test('a real removal is still marked (removed)', () => {
+    expect(
+      detectTechniques(corpus('obfuscator-default.js'), PRETTY_CLEAN),
+    ).toEqual(['string-array (rotated) (removed)']);
+  });
+});
+
 describe('plain code', () => {
   test('unobfuscated code reports nothing', () => {
     expect(detectTechniques(PLAIN, PRETTY_CLEAN)).toEqual([]);

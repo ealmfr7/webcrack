@@ -52,6 +52,16 @@ function hasStringArrayRotator(code: string): boolean {
   );
 }
 
+/**
+ * Decoder-call residue in the clean code. `unminify` rewrites the
+ * `while (!![])` rotation head to `while (true)` without removing anything,
+ * so a vanished rotator shape alone must not read as a removal while the
+ * rotation machinery (`push`/`shift` calls) still runs.
+ */
+function decoderCallsRemain(code: string): boolean {
+  return code.includes('push') && code.includes('shift');
+}
+
 /** Custom base64 alphabet embedded in a string-array decoder. */
 function hasBase64Decoder(code: string): boolean {
   return code.includes(BASE64_TAIL);
@@ -183,15 +193,22 @@ interface Technique {
  * signature is present in the original but gone from the clean code is
  * reported with a ` (removed)` suffix. `interpreters` lets the caller pass
  * the `detectInterpreters()` result computed at open time; when omitted it
- * is computed here from the parsed original.
+ * is computed here from the parsed original. `opts.deobfuscated` tells
+ * whether the clean code went through deobfuscation (default true): with
+ * `deobfuscate: false` only `unminify` runs, which rewrites shapes such as
+ * `while (!![])` without removing any decoder, so nothing is marked
+ * `(removed)`. Even when deobfuscation ran, a vanished shape alone is not
+ * enough: the decoder calls must be gone from the clean code as well.
  */
 export function detectTechniques(
   original: string,
   cleanModules: string[],
   interpreters?: InterpreterSummary[],
+  opts?: { deobfuscated?: boolean },
 ): string[] {
   const clean = cleanModules.join('\n');
   const removedKnown = clean.trim().length > 0;
+  const deobfuscated = opts?.deobfuscated ?? true;
 
   const vmCount =
     interpreters === undefined
@@ -274,10 +291,11 @@ export function detectTechniques(
   ];
 
   const found: string[] = [];
+  const residue = removedKnown && decoderCallsRemain(clean);
   for (const technique of techniques) {
     const label = technique.label(original);
     if (label === undefined) continue;
-    if (removedKnown && !technique.present(clean)) {
+    if (removedKnown && deobfuscated && !technique.present(clean) && !residue) {
       found.push(`${label} (removed)`);
     } else {
       found.push(label);
