@@ -124,6 +124,77 @@ function formatSuggestions(candidates: string[]): string {
     : '';
 }
 
+/** 1-based line count of a module's clean code. */
+function lineCount(entry: ModuleEntry): number {
+  return entry.code.split('\n').length;
+}
+
+/**
+ * Throw an actionable `WcError` when `start`-`end` exceeds the module's line
+ * count (e.g. `src/api.js has 9 lines; valid range 1-9`).
+ */
+function checkLines(entry: ModuleEntry, start: number, end: number): void {
+  const count = lineCount(entry);
+  if (start > count || end > count) {
+    throw new WcError(
+      `${entry.path} has ${count} line${count === 1 ? '' : 's'}; valid range 1-${count}.`,
+    );
+  }
+}
+
+/**
+ * Match modules by an optional filter. Shared by `wc_map`, `wc_search`, and
+ * `wc_findings` so every tool filters modules the same way.
+ *
+ * - An undefined filter matches all modules.
+ * - A leading `./` is stripped before matching.
+ * - An exact module path or bundle id matches that one module.
+ * - Anything else is a path prefix (a folder filter, e.g. `src/api/`).
+ * - No match → `WcError` with `suggest()` candidates over module paths.
+ */
+export function matchModules(ws: Workspace, filter?: string): ModuleEntry[] {
+  const modules = [...ws.modules.values()];
+  if (filter === undefined) return modules;
+  const needle = normalizeModule(filter);
+  const exact = modules.find(
+    (m) => normalizeModule(m.path) === needle || m.bundleId === needle,
+  );
+  if (exact) return [exact];
+  const prefixed = modules.filter((m) =>
+    normalizeModule(m.path).startsWith(needle),
+  );
+  if (prefixed.length > 0) return prefixed;
+  const candidates = suggest(
+    needle,
+    modules.map((m) => m.path),
+  );
+  throw new WcError(
+    `No modules match "${filter}".${formatSuggestions(candidates)} Call wc_map to list modules.`,
+    candidates,
+  );
+}
+
+const symbolsByNameCache = new WeakMap<Workspace, Map<string, SymbolEntry[]>>();
+
+/**
+ * Group a workspace's symbols by name, memoized per workspace object (so
+ * callers like the wave-B call-graph tools can pre-filter edges before
+ * calling `resolveSymbol` on each one). The map is a snapshot: re-indexing
+ * into the same workspace object after the first call is not reflected.
+ */
+export function symbolsByName(ws: Workspace): Map<string, SymbolEntry[]> {
+  const cached = symbolsByNameCache.get(ws);
+  if (cached) return cached;
+  const grouped = new Map<string, SymbolEntry[]>();
+  for (const symbol of ws.index.symbols) {
+    const list = grouped.get(symbol.name);
+    if (list) list.push(symbol);
+    else grouped.set(symbol.name, [symbol]);
+  }
+  symbolsByNameCache.set(ws, grouped);
+  return grouped;
+}
+
 /** Module part of a `module:line` location. */
 function locationModule(from: Location): string {
   return from.slice(0, from.lastIndexOf(':'));
@@ -138,7 +209,13 @@ function locationModule(from: Location): string {
  *   even though `src/api.js` also binds `sign` via its import). Only when
  *   every match is an import binding is each followed through its import and
  *   deduped; ambiguity is reported only when more than one REAL definition
- *   remains.
+ *   remains. A single match that is an import binding is followed through
+ *   its import the same way, falling back to the binding itself when it
+ *   follows nowhere (e.g. a namespace import).
+ * - A qualified `module:name` whose match is an import binding is followed
+ *   through the import too (e.g. `src/api.js:sign` is `src/sign.js:sign`,
+ *   not the import line in `src/api.js`); a namespace binding still resolves
+ *   to the binding itself.
  * - With `from` (a `module:line` location): the symbol defined in `from`'s
  *   module wins, else the symbol reached through that module's import of the
  *   name (e.g. `api.js` imports `sign`, so `resolveSymbol(ws, 'sign',
@@ -167,7 +244,11 @@ export function resolveSymbol(
         candidates,
       );
     }
-    return inModule[0];
+    const found = inModule[0];
+    if (found.kind === 'import') {
+      return resolveThroughImport(ws, entry.path, name) ?? found;
+    }
+    return found;
   }
 
   const matches = ws.index.symbols.filter((s) => s.name === input);
@@ -195,7 +276,13 @@ export function resolveSymbol(
     if (imported) return imported;
     if (local.length > 0) return local[0];
   }
-  if (matches.length === 1) return matches[0];
+  if (matches.length === 1) {
+    const only = matches[0];
+    if (only.kind === 'import') {
+      return resolveThroughImport(ws, only.module, only.name) ?? only;
+    }
+    return only;
+  }
 
   const real = matches.filter((s) => s.kind !== 'import');
   if (real.length === 1) return real[0];
@@ -277,6 +364,10 @@ export function resolveThroughImport(
  * Resolve an exported name in a module: a real (non-import) local symbol
  * first, then the `index.reexports` chain (barrels, including `export *`),
  * then an import binding that is re-exported. Cycles give `undefined`.
+ *
+ * `export *` never re-exports `default`; `export * as ns from '…'` (stored
+ * as `{ name: 'ns', importedName: '*' }`) is a namespace, so requesting that
+ * name gives `undefined` instead of following into the source module.
  */
 function resolveExport(
   ws: Workspace,
@@ -295,10 +386,14 @@ function resolveExport(
   if (real) return real;
   for (const re of ws.index.reexports) {
     if (normalizeModule(re.module) !== mod) continue;
+    if (re.name === name && re.importedName === '*') {
+      // `export * as ns from '…'`: a namespace, not a followable binding.
+      return undefined;
+    }
     if (re.name === name && re.importedName !== '*') {
       const found = resolveExport(ws, re.from, re.importedName, seen);
       if (found) return found;
-    } else if (re.name === '*' || re.importedName === '*') {
+    } else if (re.name === '*' && name !== 'default') {
       const found = resolveExport(ws, re.from, name, seen);
       if (found) return found;
     }
@@ -333,10 +428,12 @@ export function resolveTarget(
     }
     case 'line': {
       const entry = resolveModule(ws, parsed.module);
+      checkLines(entry, parsed.line, parsed.line);
       return { module: entry.path, start: parsed.line, end: parsed.line };
     }
     case 'range': {
       const entry = resolveModule(ws, parsed.module);
+      checkLines(entry, parsed.start, parsed.end);
       return { module: entry.path, start: parsed.start, end: parsed.end };
     }
     case 'symbol': {
