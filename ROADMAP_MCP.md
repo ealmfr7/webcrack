@@ -24,8 +24,8 @@ responder preguntas reales de reversing sobre JS ofuscado/empaquetado
 - "¿Qué módulo maneja el login? ¿Guarda el token en localStorage?"
 - "Esta función sigue ofuscada: límpiala y explícamela."
 
-Se considera logrado cuando el set de evaluación (M1.8 / M2.6) resuelve
-≥ 80 % de las tareas con una mediana de ≤ 12 llamadas a tools.
+Se considera logrado cuando las tools cubren las preguntas listadas
+arriba, con los tests verdes y el uso manual (inspector) que lo confirme.
 
 ## 2. Principios de diseño (obligatorios)
 
@@ -83,8 +83,7 @@ packages/mcp/
 │   │   └── errors.ts       # WcError + sugerencias (distancia de edición)
 │   └── prompts/
 │       └── audit.ts        # prompt MCP "audit"
-├── test/                   # vitest; helpers.ts: connect() + fixtureWorkspace()
-└── evals/                  # tareas de evaluación con agentes reales
+└── test/                   # vitest; helpers.ts: connect() + fixtureWorkspace()
 ```
 
 ### 3.1 Modelo: Workspace
@@ -260,25 +259,25 @@ pisarse:
 
 **Orden de oleadas** (dentro de cada oleada, todo en paralelo):
 
-| Oleada               | Tareas                | Archivos propios                                                                                                                                 |
-| -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A (serie, primero)   | M0.2, M0.3            | `packages/webcrack/{package.json,esbuild.config.js}`, `packages/webcrack/src/analysis-entry.ts` (nuevo), `mcp/src/config.ts`                     |
-| A (serie, primero)   | A2.1                  | contratos: `workspace/types.ts`, `format/target.ts` (nuevo), stubs (`indexer`, `tags`, `loader`, `store`, `search-ast`), `test/{helpers,target}` |
-| B                    | M1.1                  | `workspace/loader.ts` (suyo)                                                                                                                     |
-| B                    | M1.2                  | `workspace/{indexer,store}.ts` (suyos) + módulo de caché (nuevo, suyo)                                                                           |
-| B                    | M1.4                  | `workspace/tags.ts`, `tools/map.ts`                                                                                                              |
-| B                    | M1.5                  | `tools/outline.ts`, `tools/read.ts`                                                                                                              |
-| B                    | M1.6                  | `tools/search.ts`                                                                                                                                |
-| B                    | M1.7                  | `tools/findings.ts`, `tools/goto.ts`, `workspace/findings.ts` (lógica compartida de findings, usada luego por M1.3 overview y M3.1)              |
-| B                    | M2.1                  | `tools/refs.ts`                                                                                                                                  |
-| B                    | M2.2                  | `tools/graph.ts`                                                                                                                                 |
-| B                    | M3.2                  | `prompts/audit.ts`                                                                                                                               |
-| C (tras M1.1 + M1.2) | M1.3                  | `tools/open.ts` (solo formato; `store.open`/`listCached`/caché son de M1.2)                                                                      |
-| C                    | M2.3                  | `tools/annotate.ts`, `workspace/annotations.ts`                                                                                                  |
-| C                    | M2.4                  | `tools/deobfuscate.ts`                                                                                                                           |
-| C                    | M2.5                  | `workspace/search-ast.ts` (lo llama `search.ts` con `kind=ast`)                                                                                  |
-| C                    | M3.1, M3.3            | `tools/export.ts`, `resources/`                                                                                                                  |
-| D (tras C)           | M1.8, M2.6, M3.4–M3.7 | `evals/`, `tools/trace.ts`, `tools/diff.ts`, docs                                                                                                |
+| Oleada               | Tareas     | Archivos propios                                                                                                                                 |
+| -------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A (serie, primero)   | M0.2, M0.3 | `packages/webcrack/{package.json,esbuild.config.js}`, `packages/webcrack/src/analysis-entry.ts` (nuevo), `mcp/src/config.ts`                     |
+| A (serie, primero)   | A2.1       | contratos: `workspace/types.ts`, `format/target.ts` (nuevo), stubs (`indexer`, `tags`, `loader`, `store`, `search-ast`), `test/{helpers,target}` |
+| B                    | M1.1       | `workspace/loader.ts` (suyo)                                                                                                                     |
+| B                    | M1.2       | `workspace/{indexer,store}.ts` (suyos) + módulo de caché (nuevo, suyo)                                                                           |
+| B                    | M1.4       | `workspace/tags.ts`, `tools/map.ts`                                                                                                              |
+| B                    | M1.5       | `tools/outline.ts`, `tools/read.ts`                                                                                                              |
+| B                    | M1.6       | `tools/search.ts`                                                                                                                                |
+| B                    | M1.7       | `tools/findings.ts`, `tools/goto.ts`, `workspace/findings.ts` (lógica compartida de findings, usada luego por M1.3 overview y M3.1)              |
+| B                    | M2.1       | `tools/refs.ts`                                                                                                                                  |
+| B                    | M2.2       | `tools/graph.ts`                                                                                                                                 |
+| B                    | M3.2       | `prompts/audit.ts`                                                                                                                               |
+| C (tras M1.1 + M1.2) | M1.3       | `tools/open.ts` (solo formato; `store.open`/`listCached`/caché son de M1.2)                                                                      |
+| C                    | M2.3       | `tools/annotate.ts`, `workspace/annotations.ts`                                                                                                  |
+| C                    | M2.4       | `tools/deobfuscate.ts`                                                                                                                           |
+| C                    | M2.5       | `workspace/search-ast.ts` (lo llama `search.ts` con `kind=ast`)                                                                                  |
+| C                    | M3.1, M3.3 | `tools/export.ts`, `resources/`                                                                                                                  |
+| D (tras C)           | M3.4–M3.7  | `tools/trace.ts`, `tools/diff.ts`, docs                                                                                                          |
 
 **Decisiones de la oleada D**: los findings se precomputan en la caché
 (`findings.json`); `wc_open` acepta el id de 8 hex de un workspace para
@@ -342,11 +341,7 @@ encolan los nodos aún no visitados.
 - [x] **M1.7** `wc_findings` (todas las categorías de §4) y `wc_goto`.
       La lógica compartida de findings vive en `workspace/findings.ts`
       (la usan luego M1.3 para el overview y M3.1 para exportar).
-- [ ] **M1.8** Evaluación v1: `evals/tasks.jsonl` con ≥ 10 tareas sobre
-      `packages/webcrack/test/corpus` y `evals/run.ts` que las ejecute con
-      `claude -p --mcp-config evals/mcp.json --output-format json` y mida:
-      acierto (checker por tarea), nº de tool calls y tokens.
-      Documentar resultados en `evals/RESULTS.md`.
+- [x] **M1.8** Evaluación v1 — descartado por decisión del usuario (2026-09-24).
 
 ### Fase 2: relaciones y comprensión
 
@@ -366,8 +361,7 @@ encolan los nodos aún no visitados.
       `expression` evalúa en el sandbox (`createNodeSandbox`) con timeout.
       Muestra diff compacto; `apply=true` lo integra en el workspace.
 - [x] **M2.5** `wc_search kind=ast` (patrones con `$X` / `$$ARGS`).
-- [ ] **M2.6** Evaluación v2: ≥ 20 tareas (incluidas de navegación y
-      anotación); comparar con v1 y ajustar descripciones de tools.
+- [x] **M2.6** Evaluación v2 — descartado por decisión del usuario (2026-09-24).
 
 ### Fase 3: flujo completo y funciones avanzadas
 
@@ -407,7 +401,6 @@ encolan los nodos aún no visitados.
   `packages/webcrack/test/corpus`.
 - **Snapshots** de las respuestas de texto (son el contrato con el agente).
 - **Manual**: `npx @modelcontextprotocol/inspector node packages/mcp/dist/index.js`.
-- **Evals** con agentes reales (M1.8, M2.6): la métrica que manda.
 
 ## 8. Convenciones
 
@@ -417,7 +410,7 @@ encolan los nodos aún no visitados.
   `webcrack/analysis`, nunca copiar código.
 - Estilo: el del repo (TypeScript estricto, prettier, eslint compartido).
 - Descripciones de tools: cortas, en inglés, diciendo **cuándo** usarla y
-  qué devuelve; son parte del producto y se ajustan con las evals.
+  qué devuelve; son parte del producto.
 
 ## 9. Uso
 

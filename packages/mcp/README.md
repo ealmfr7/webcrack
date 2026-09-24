@@ -64,7 +64,7 @@ from one tool to the next. Lists are paginated (`limit`, default 30, max 500;
 | `wc_workspaces`  | List opened and cached workspaces (pass a cached id back to `wc_open` to reopen it instantly)                                                             | —                                                                                                                                                           |
 | `wc_map`         | Browse modules like a file tree (size, tags, entry point)                                                                                                 | `path`, `tag` (`network`, `auth`, `crypto`, `storage`, `dom`, `vm`, `vendor`), `sort`, `detail`, `limit`, `offset`                                          |
 | `wc_outline`     | List the symbols of one module with lines, params and ref counts                                                                                          | `module`, `detail` (`concise`, `full`)                                                                                                                      |
-| `wc_search`      | Search the clean code                                                                                                                                     | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
+| `wc_search`      | Search the clean code (case-insensitive unless quoted)                                                                                                    | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
 | `wc_findings`    | Precomputed intel with `module:line` locations                                                                                                            | `category` (`summary`, `endpoints`, `urls`, `secrets`, `regexes`, `interesting`, `sinks`, `storage`, `crypto`, `vm`), `module`, `reveal`, `limit`, `offset` |
 | `wc_read`        | Read code with line numbers (`module`, `module:line`, `module:start-end`, `module:symbol` or bare `symbol`)                                               | `target`, `view` (`clean`, `raw`), `context`, `column`                                                                                                      |
 | `wc_goto`        | Jump to a symbol's definition (location, signature, first lines)                                                                                          | `symbol`, `from` (`module:line` used for scope-accurate resolution)                                                                                         |
@@ -176,26 +176,6 @@ source=<code|url>`:
 
 Nothing is wired automatically: copy the code or URL between the two MCP
 sessions by hand (or via the agent driving both).
-
-## Evals
-
-`evals/` measures whether a real agent solves reverse-engineering tasks with
-these tools (target: ≥ 80 % solved, median ≤ 12 tool calls). They need Node ≥
-22.6 for `--experimental-strip-types` (e.g. `nvm use 24`) and a built server
-(`pnpm build`).
-From the repo root:
-
-```sh
-node --experimental-strip-types packages/mcp/evals/run.ts --dry-run
-node --experimental-strip-types packages/mcp/evals/run.ts [--only <id>] [--concurrency N]
-```
-
-`--dry-run` validates the tasks and checks the samples without spawning
-`claude`: it also starts the built server (`packages/mcp/dist/index.js`) and
-lists its tools.
-A real run costs money (one Claude session per task); results
-accumulate in `evals/results/` and `evals/RESULTS.md`. See
-[`evals/README.md`](evals/README.md) for the task format.
 
 ## Inspector
 
