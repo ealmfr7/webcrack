@@ -352,7 +352,7 @@ pisarse:
       contexto necesario del módulo) por webcrack/transformaciones de nuevo;
       `expression` evalúa en el sandbox (`createNodeSandbox`) con timeout.
       Muestra diff compacto; `apply=true` lo integra en el workspace.
-- [ ] **M2.5** `wc_search kind=ast` (patrones con `$X` / `$$ARGS`).
+- [x] **M2.5** `wc_search kind=ast` (patrones con `$X` / `$$ARGS`).
 - [ ] **M2.6** Evaluación v2: ≥ 20 tareas (incluidas de navegación y
       anotación); comparar con v1 y ajustar descripciones de tools.
 
