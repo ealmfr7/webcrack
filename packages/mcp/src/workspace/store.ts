@@ -17,6 +17,7 @@ import {
 import { buildIndex } from './indexer';
 import { loadSource } from './loader';
 import { tagModule } from './tags';
+import { detectTechniques } from './techniques';
 import type {
   CachedSummary,
   InterpreterSummary,
@@ -36,6 +37,12 @@ export interface StoreDeps {
   loadSource: typeof loadSource;
   buildIndex: typeof buildIndex;
   tagModule: typeof tagModule;
+  /**
+   * Optional so fakes built before this task (which only stub
+   * webcrack/loadSource/buildIndex/tagModule) keep working: they fall back
+   * to the real detector at the call site.
+   */
+  detectTechniques?: typeof detectTechniques;
 }
 
 export type ProgressFn = (fraction: number, message?: string) => Promise<void>;
@@ -221,6 +228,7 @@ export class WorkspaceStore {
       loadSource,
       buildIndex,
       tagModule,
+      detectTechniques,
     },
   ) {}
 
@@ -329,6 +337,13 @@ export class WorkspaceStore {
     }
     await progress(0.85, 'modules tagged');
 
+    const detect = this.deps.detectTechniques ?? detectTechniques;
+    const techniques = detect(
+      loaded.code,
+      [...modules.values()].map((module) => module.code),
+      interpreters,
+    );
+
     const workspace: Workspace = {
       id,
       source: { kind: loaded.kind, label: loaded.label, bytes: loaded.bytes },
@@ -339,7 +354,7 @@ export class WorkspaceStore {
       report,
       interpreters,
       annotations: [],
-      stats: { openMs: Date.now() - startedAt, techniques: [] },
+      stats: { openMs: Date.now() - startedAt, techniques },
     };
     await progress(0.92, 'writing cache');
     await writeWorkspaceToCache(this.config, workspace, WEBCRACK_VERSION);

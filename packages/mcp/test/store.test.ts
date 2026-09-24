@@ -6,6 +6,7 @@ import { webcrack } from 'webcrack';
 import type { Config } from '../src/config';
 import { WcError } from '../src/format/errors';
 import { WorkspaceStore, type StoreDeps } from '../src/workspace/store';
+import { detectTechniques } from '../src/workspace/techniques';
 import type { LoadedSource, WorkspaceIndex } from '../src/workspace/types';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -54,6 +55,7 @@ function testDeps(overrides: Partial<StoreDeps> = {}): StoreDeps {
       }),
     buildIndex: () => EMPTY_INDEX,
     tagModule: () => [],
+    detectTechniques,
     ...overrides,
   };
 }
@@ -336,4 +338,69 @@ test("modules with an interpreter get the 'vm' tag", async () => {
   expect(hit?.bytecode).toBe('bytecode');
   expect(hit?.stack).toBe('stack');
   expect(workspace.modules.get('main.js')?.tags).toContain('vm');
+});
+
+test('open fills stats.techniques for an obfuscated corpus sample', async () => {
+  const config = await makeConfig();
+  const code = await readFile(
+    new URL(
+      '../../webcrack/test/corpus/obfuscator-default.js',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const store = new WorkspaceStore(
+    config,
+    testDeps({
+      loadSource: (): Promise<LoadedSource> =>
+        Promise.resolve({
+          kind: 'code',
+          label: '<obfuscator-default>',
+          code,
+          bytes: code.length,
+        }),
+    }),
+  );
+  const { workspace } = await store.open(code, {}, progressRecorder().fn);
+  expect(workspace.stats.techniques.length).toBeGreaterThan(0);
+  expect(workspace.stats.techniques).toContain('string-array (rotated)');
+});
+
+test('techniques survive reopening without calling the detector again', async () => {
+  const config = await makeConfig();
+  let calls = 0;
+  const seen: Array<{ clean: string[]; interpreterCount: number }> = [];
+  const store = new WorkspaceStore(
+    config,
+    testDeps({
+      detectTechniques: (original, cleanModules, interpreters) => {
+        calls++;
+        seen.push({
+          clean: cleanModules,
+          interpreterCount: interpreters?.length ?? -1,
+        });
+        return detectTechniques(original, cleanModules, interpreters);
+      },
+    }),
+  );
+  const code = `function load() {
+  if ('0x3f2a' === '0x7b1c') {
+    init();
+  } else {
+    fallback();
+  }
+}`;
+  const first = await store.open(code, {}, progressRecorder().fn);
+  expect(calls).toBe(1);
+  expect(first.workspace.stats.techniques).toEqual(['dead-code-injection']);
+  // The detector saw the deobfuscated modules and the open-time
+  // interpreters, not just the raw source.
+  expect(seen[0]?.clean).toEqual([code]);
+  expect(seen[0]?.interpreterCount).toBeGreaterThanOrEqual(0);
+  const second = await store.open(code, {}, progressRecorder().fn);
+  expect(second.cached).toBe(true);
+  expect(calls).toBe(1);
+  expect(second.workspace.stats.techniques).toEqual(
+    first.workspace.stats.techniques,
+  );
 });
