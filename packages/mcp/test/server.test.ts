@@ -16,6 +16,7 @@ test('registers the explorer tools', async () => {
     'wc_goto',
     'wc_refs',
     'wc_graph',
+    'wc_diff',
     'wc_deobfuscate',
     'wc_annotate',
     'wc_export',

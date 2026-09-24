@@ -1,6 +1,7 @@
 import { annotate } from './annotate';
 import { deobfuscate } from './deobfuscate';
 import type { ToolDef } from './define';
+import { diff } from './diff';
 import { exportWorkspace } from './export';
 import { findings } from './findings';
 import { goto } from './goto';
@@ -24,6 +25,7 @@ export const tools: ToolDef[] = [
   goto,
   refs,
   graph,
+  diff,
   deobfuscate,
   annotate,
   exportWorkspace,
