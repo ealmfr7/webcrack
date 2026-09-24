@@ -135,13 +135,22 @@ describe('evaluateInModule', () => {
     await expect(evaluateInModule(code, 'v', OPTS)).resolves.toBe('42');
   });
 
-  test('an anonymous default export is hoisted and callable early', async () => {
+  test('an anonymous default export survives a user __wc_default binding', async () => {
+    // The hoisted name is scope-unique, so a user binding of the old
+    // reserved name no longer collides with the transpile.
     const code = [
-      'const v = __wc_default();',
+      'const __wc_default = 3;',
       'export default function () { return 42; }',
     ].join('\n');
-    // The reserved hoisted name is callable before the declaration line.
-    await expect(evaluateInModule(code, 'v', OPTS)).resolves.toBe('42');
+    await expect(
+      evaluateInModule(code, 'module.exports.default.name', OPTS),
+    ).resolves.toBe('default');
+    await expect(evaluateInModule(code, '__wc_default', OPTS)).resolves.toBe(
+      '3',
+    );
+    await expect(
+      evaluateInModule(code, 'module.exports.default()', OPTS),
+    ).resolves.toBe('42');
   });
 
   test('an anonymous default export reports name "default"', async () => {

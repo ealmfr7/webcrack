@@ -245,13 +245,14 @@ function tryTranspileEsm(code: string): string | undefined {
             return;
           }
           // Anonymous `export default function () {}`: keep it hoisted by
-          // emitting a function declaration under a reserved name, so
-          // earlier code can call it. Anonymous classes stay as
-          // expressions (classes aren't hoisted anyway). Both get the
-          // name "default".
+          // emitting a function declaration under a scope-unique name (a
+          // fixed name would collide with a user binding and break the
+          // transpile). Anonymous classes stay as expressions (classes
+          // aren't hoisted anyway). Both get the name "default".
           if (t.isFunctionDeclaration(declaration)) {
+            const uid = path.scope.generateUidIdentifier('default');
             const fn = t.functionDeclaration(
-              t.identifier('__wc_default'),
+              uid,
               declaration.params,
               declaration.body,
               declaration.generator,
@@ -259,11 +260,8 @@ function tryTranspileEsm(code: string): string | undefined {
             );
             path.replaceWithMultiple([
               fn,
-              exportAssignment(
-                t.identifier('default'),
-                t.identifier('__wc_default'),
-              ),
-              defineNameStatement(t.identifier('__wc_default')),
+              exportAssignment(t.identifier('default'), t.cloneNode(uid)),
+              defineNameStatement(t.cloneNode(uid)),
             ]);
             return;
           }
