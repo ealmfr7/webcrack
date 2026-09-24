@@ -50,6 +50,7 @@ export interface CLIFlags {
   deobfuscate?: boolean;
   unminify?: boolean;
   renameHeuristics?: boolean;
+  tsEnums?: boolean;
   report?: boolean;
   graph?: boolean;
   trace?: boolean;
@@ -66,6 +67,7 @@ export function toWebcrackOptions(flags: CLIFlags): Options {
   if (flags.mangle !== undefined) options.mangle = flags.mangle;
   if (flags.renameHeuristics !== undefined)
     options.renameHeuristics = flags.renameHeuristics;
+  if (flags.tsEnums !== undefined) options.tsEnums = flags.tsEnums;
   if (flags.report !== undefined) options.report = flags.report;
   if (flags.graph !== undefined) options.graph = flags.graph;
   if (flags.trace !== undefined) options.trace = flags.trace;
@@ -344,6 +346,10 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
     .option(
       '--rename-heuristics',
       'rename short or mangled variable names using heuristics',
+    )
+    .option(
+      '--ts-enums',
+      'restore TypeScript enums (output is TypeScript, not JavaScript)',
     )
     .option(
       '--library-mappings',

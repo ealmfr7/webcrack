@@ -97,6 +97,12 @@ Defaults (`b = _x[1] === void 0 ? 10 : _x[1]` → `[a, b = 10]`), holes
 
 <https://babeljs.io/docs/babel-plugin-transform-typescript>
 
+::: warning Opt-in
+Off by default: the restored `enum` is TypeScript, so the output would no
+longer run in node or parse as JavaScript in other tools. Enable it with the
+`tsEnums` option or the `--ts-enums` CLI flag.
+:::
+
 ```js
 var E; // [!code --]
 (function (E) { // [!code --]

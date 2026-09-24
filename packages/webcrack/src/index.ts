@@ -38,6 +38,7 @@ import jsx from './transforms/jsx';
 import jsxNew from './transforms/jsx-new';
 import mangle from './transforms/mangle';
 import renameHeuristics from './transforms/rename-heuristics';
+import tsEnum from './transpile/transforms/ts-enum';
 import transpile from './transpile';
 import unminify from './unminify';
 import {
@@ -181,6 +182,15 @@ export interface Options {
    */
   renameHeuristics?: boolean;
   /**
+   * Restore TypeScript enums from their compiled factory IIFEs
+   * (`(function (E) { E[E["A"] = 0] = "A"; })(E || (E = {}))` becomes
+   * `enum E { A = 0 }`). More readable, but the output is then TypeScript,
+   * not JavaScript: it no longer runs in node or parses as JavaScript in
+   * other tools. Requires `unminify`.
+   * @default false
+   */
+  tsEnums?: boolean;
+  /**
    * Collect URLs, network endpoints, secrets, regexes and other
    * interesting strings with original source positions.
    * @default false
@@ -255,6 +265,7 @@ function mergeOptions(options: Options): asserts options is Required<Options> {
     deobfuscate: true,
     mangle: false,
     renameHeuristics: false,
+    tsEnums: false,
     report: false,
     graph: false,
     sourceMap: false,
@@ -342,6 +353,7 @@ export async function webcrack(
       (() => {
         applyTransforms(ast, [transpile, unminify]);
       }),
+    options.unminify && options.tsEnums && (() => applyTransform(ast, tsEnum)),
     plugins.afterUnminify &&
       (() => runPlugins(ast, plugins.afterUnminify!, state)),
 

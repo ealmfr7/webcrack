@@ -148,6 +148,7 @@ await webcrack(code, {
   deobfuscate: true, // Deobfuscate the code
   mangle: false, // Mangle variable names
   renameHeuristics: false, // Rename short names using heuristics
+  tsEnums: false, // Restore TypeScript enums (output becomes TypeScript)
   report: false, // Collect URLs, endpoints, secrets, ... (see below)
   graph: false, // Build module and call graphs (see below)
   sourceMap: false, // Emit a source map as `result.map`

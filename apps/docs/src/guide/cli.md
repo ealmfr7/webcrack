@@ -38,6 +38,7 @@ Options:
   --trace                      record a per-stage transform trace
   --source-map                 emit a source map of the deobfuscated code
   --rename-heuristics          rename short or mangled variable names using heuristics
+  --ts-enums                   restore TypeScript enums (output is TypeScript, not JavaScript)
   --library-mappings           name modules matching known open-source libraries
   --llm-rename-command <cmd>   external command for LLM-based renaming
                                (batch JSON on stdin, {old:new} map on stdout)
