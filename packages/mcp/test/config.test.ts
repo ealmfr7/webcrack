@@ -145,7 +145,7 @@ describe('WEBCRACK_MCP_TIMEOUT_MS', () => {
     'overflow value %j is rejected (would overflow setTimeout)',
     (raw) => {
       expect(() => loadConfig({ WEBCRACK_MCP_TIMEOUT_MS: raw })).toThrowError(
-        `Invalid WEBCRACK_MCP_TIMEOUT_MS="${raw}": expected a positive integer (milliseconds). Default: ${DEFAULT_TIMEOUT_MS}.`,
+        `Invalid WEBCRACK_MCP_TIMEOUT_MS="${raw}": expected a positive integer ≤ 2147483647 (milliseconds). Default: ${DEFAULT_TIMEOUT_MS}.`,
       );
     },
   );
