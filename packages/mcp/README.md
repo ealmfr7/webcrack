@@ -64,7 +64,7 @@ from one tool to the next. Lists are paginated (`limit`, default 30, max 500;
 | `wc_workspaces`  | List opened and cached workspaces (pass a cached id back to `wc_open` to reopen it instantly)                                                             | —                                                                                                                                                           |
 | `wc_map`         | Browse modules like a file tree (size, tags, entry point)                                                                                                 | `path`, `tag` (`network`, `auth`, `crypto`, `storage`, `dom`, `vm`, `vendor`), `sort`, `detail`, `limit`, `offset`                                          |
 | `wc_outline`     | List the symbols of one module with lines, params and ref counts                                                                                          | `module`, `detail` (`concise`, `full`)                                                                                                                      |
-| `wc_search`      | Search the clean code (case-insensitive unless quoted)                                                                                                    | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
+| `wc_search`      | Search the clean code (text/string: case-insensitive; identifier: case-insensitive unless quoted, then exact; regex/call/ast: case-sensitive)             | `query`, `kind` (`text`, `regex`, `string`, `identifier`, `call`, `ast`), `module`, `limit`, `offset`                                                       |
 | `wc_findings`    | Precomputed intel with `module:line` locations                                                                                                            | `category` (`summary`, `endpoints`, `urls`, `secrets`, `regexes`, `interesting`, `sinks`, `storage`, `crypto`, `vm`), `module`, `reveal`, `limit`, `offset` |
 | `wc_read`        | Read code with line numbers (`module`, `module:line`, `module:start-end`, `module:symbol` or bare `symbol`)                                               | `target`, `view` (`clean`, `raw`), `context`, `column`                                                                                                      |
 | `wc_goto`        | Jump to a symbol's definition (location, signature, first lines)                                                                                          | `symbol`, `from` (`module:line` used for scope-accurate resolution)                                                                                         |
@@ -77,6 +77,10 @@ from one tool to the next. Lists are paginated (`limit`, default 30, max 500;
 | `wc_trace`       | Follow the flow of a value: where a URL/token is built and which function sends it (via refs + assignments)                                               | `value`, `direction` (`backward`, `forward`, `both`), `depth` (default 4, max 8), `maxSteps` (default 40, max 200)                                          |
 
 Every tool above is implemented.
+
+Renames via `wc_annotate` reindex only the changed module — except the
+first rename after reopening a workspace by id, which does a full reindex
+(a few seconds on multi-MB bundles).
 
 ## Resources
 
