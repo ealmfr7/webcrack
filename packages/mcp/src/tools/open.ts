@@ -60,6 +60,17 @@ export const open = defineTool({
     if (WORKSPACE_ID.test(args.source)) {
       const hit = await readWorkspaceFromCache(ctx.config, args.source);
       if (hit !== undefined) {
+        // A cached id reopens the workspace as-is: `refresh` and `options`
+        // only apply when processing the original source, so they must not
+        // be silently ignored here.
+        const hasOptions = Object.values(args.options ?? {}).some(
+          (value) => value !== undefined,
+        );
+        if (args.refresh || hasOptions) {
+          throw new WcError(
+            'refresh/options need the original source: call wc_open with the file path or URL (wc_workspaces shows it)',
+          );
+        }
         ctx.store.add(hit);
         return renderOverview(hit, true, ctx);
       }

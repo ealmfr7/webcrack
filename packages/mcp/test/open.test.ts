@@ -314,6 +314,42 @@ test('a cached workspace reopens by id from a fresh store', async () => {
   expect(diff).toContain('1 changed');
 }, 60_000);
 
+test('a cached id with refresh/options is an actionable error', async () => {
+  const first = await setup();
+  const opened = await first.call('wc_open', { source: LITERAL });
+  const id = /^Workspace ([0-9a-f]{8})/.exec(opened)?.[1];
+  expect(id).toBeDefined();
+  const second = await setup(e2eDeps(), first.config.cacheDir);
+  const textOf = (result: CallToolResult): string =>
+    result.content
+      .map((part) => (part.type === 'text' ? part.text : ''))
+      .join('\n');
+  const expected =
+    'refresh/options need the original source: call wc_open with the file path or URL (wc_workspaces shows it)';
+  for (const args of [
+    { source: id, refresh: true },
+    { source: id, options: { deobfuscate: false } },
+    { source: id, refresh: true, options: { unpack: true } },
+  ]) {
+    const result = await second.callRaw('wc_open', args);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(expected);
+  }
+  // The failed reopens did not add a workspace to the store.
+  expect(second.store.list()).toHaveLength(0);
+});
+
+test('a cached id with empty options still reopens', async () => {
+  const first = await setup();
+  const opened = await first.call('wc_open', { source: LITERAL });
+  const id = /^Workspace ([0-9a-f]{8})/.exec(opened)?.[1];
+  expect(id).toBeDefined();
+  const second = await setup(e2eDeps(), first.config.cacheDir);
+  const text = await second.call('wc_open', { source: id, options: {} });
+  expect(text).toContain(`Workspace ${id} · script`);
+  expect(text).toContain('(cached)');
+});
+
 test('an unknown 8-hex id is an actionable error, not literal code', async () => {
   const { callRaw, store } = await setup();
   const result = await callRaw('wc_open', { source: 'deadbeef' });
