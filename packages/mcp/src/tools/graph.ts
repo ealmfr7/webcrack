@@ -76,7 +76,7 @@ function defaultModuleRoot(ws: Workspace): string {
   return first.path;
 }
 
-function buildModulesGraph(
+export function buildModulesGraph(
   ws: Workspace,
   root: string | undefined,
   depth: number,
@@ -124,7 +124,7 @@ function callsOf(ws: Workspace, symbol: SymbolEntry) {
   );
 }
 
-function buildCallsGraph(
+export function buildCallsGraph(
   ws: Workspace,
   root: string | undefined,
   depth: number,
@@ -232,7 +232,7 @@ function escapeDot(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function renderDot(kind: string, graph: BuiltGraph): string {
+export function renderDot(kind: string, graph: BuiltGraph): string {
   const name = escapeDot(kind + ' from ' + graph.rootId);
   const lines = [`digraph "${name}" {`];
   for (const node of graph.nodes.values()) {

@@ -117,7 +117,7 @@ function parseMeta(data: unknown): CacheMeta {
  * NUL bytes, absolute paths and `..` segments. Module code is untrusted
  * input, so a hostile bundle must never cause a write outside its own dir.
  */
-function assertSafeModulePath(path: string): void {
+export function assertSafeModulePath(path: string): void {
   const refuse = (reason: string): WcError =>
     new WcError(
       `Cannot cache module "${path}": ${reason}. Rename the module or report the bundle as unsupported.`,
