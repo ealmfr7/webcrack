@@ -811,4 +811,27 @@ describe('symbolsByName', () => {
     expect(grouped.get('missing')).toBeUndefined();
     expect(symbolsByName(ws)).toBe(grouped);
   });
+
+  test('reflects a replaced ws.index', () => {
+    const ws = fixtureWorkspace();
+    const before = symbolsByName(ws);
+    expect(before.has('sign')).toBe(true);
+    // Simulate store.commit after renaming sign → fetchUser: same workspace
+    // object, new index object.
+    ws.index = {
+      ...ws.index,
+      symbols: ws.index.symbols.map((s) =>
+        s.name === 'sign' ? { ...s, name: 'fetchUser' } : s,
+      ),
+    };
+    const after = symbolsByName(ws);
+    expect(after).not.toBe(before);
+    expect(after.has('sign')).toBe(false);
+    expect(
+      after
+        .get('fetchUser')
+        ?.map((s) => s.module)
+        .sort(),
+    ).toEqual(['src/api.js', 'src/sign.js']);
+  });
 });

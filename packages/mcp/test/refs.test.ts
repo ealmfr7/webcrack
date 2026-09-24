@@ -161,4 +161,53 @@ describe('wc_refs callees', () => {
     expect(text).toContain('Callees of `login` (5):');
     expect(text).toContain('src/api.js:5  sign → src/sign.js:1');
   });
+
+  test('callees resolve against the replaced index after a rename', async () => {
+    const ws = fixtureWorkspace();
+    const { call } = await connect(ws);
+    const before = await call('wc_refs', {
+      symbol: 'login',
+      direction: 'callees',
+    });
+    expect(before).toContain('src/api.js:5  sign → src/sign.js:1');
+    // Simulate store.commit after renaming sign → fetchUser: same workspace
+    // object, new index object with symbols, calls, and refs renamed together.
+    const renamed = (name: string): string =>
+      name === 'sign' ? 'fetchUser' : name;
+    ws.index = {
+      ...ws.index,
+      symbols: ws.index.symbols.map((s) => {
+        if (s.name !== 'sign') return s;
+        const next = { ...s, name: 'fetchUser' };
+        if (next.importedName === 'sign') next.importedName = 'fetchUser';
+        return next;
+      }),
+      calls: ws.index.calls.map((c) => ({ ...c, callee: renamed(c.callee) })),
+      refs: ws.index.refs.map((r) => ({ ...r, name: renamed(r.name) })),
+    };
+    const after = await call('wc_refs', {
+      symbol: 'login',
+      direction: 'callees',
+    });
+    expect(after).toContain('src/api.js:5  fetchUser → src/sign.js:1');
+    expect(after).not.toContain('fetchUser (unresolved)');
+  });
+
+  test('a non-WcError during callee resolution propagates', async () => {
+    const ws = fixtureWorkspace();
+    const { call } = await connect(ws);
+    // An unexpected failure mid-resolution is a real bug: it must surface as
+    // an error, not render as `(unresolved)`.
+    const binding = ws.index.symbols.find((s) => s.kind === 'import');
+    if (!binding) throw new Error('fixture must have an import binding');
+    Object.defineProperty(binding, 'from', {
+      configurable: true,
+      get(): never {
+        throw new Error('boom');
+      },
+    });
+    await expect(
+      call('wc_refs', { symbol: 'login', direction: 'callees' }),
+    ).rejects.toThrow('boom');
+  });
 });

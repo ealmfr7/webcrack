@@ -4,6 +4,7 @@ import type {
   ModuleEntry,
   SymbolEntry,
   Workspace,
+  WorkspaceIndex,
 } from '../workspace/types';
 
 /**
@@ -174,16 +175,20 @@ export function matchModules(ws: Workspace, filter?: string): ModuleEntry[] {
   );
 }
 
-const symbolsByNameCache = new WeakMap<Workspace, Map<string, SymbolEntry[]>>();
+const symbolsByNameCache = new WeakMap<
+  WorkspaceIndex,
+  Map<string, SymbolEntry[]>
+>();
 
 /**
- * Group a workspace's symbols by name, memoized per workspace object (so
+ * Group a workspace's symbols by name, memoized per index object (so
  * callers like the wave-B call-graph tools can pre-filter edges before
- * calling `resolveSymbol` on each one). The map is a snapshot: re-indexing
- * into the same workspace object after the first call is not reflected.
+ * calling `resolveSymbol` on each one). `store.commit` replaces `ws.index`
+ * after `wc_annotate`/`wc_deobfuscate`, so keying on the index (not the
+ * workspace) keeps the map fresh after a re-index.
  */
 export function symbolsByName(ws: Workspace): Map<string, SymbolEntry[]> {
-  const cached = symbolsByNameCache.get(ws);
+  const cached = symbolsByNameCache.get(ws.index);
   if (cached) return cached;
   const grouped = new Map<string, SymbolEntry[]>();
   for (const symbol of ws.index.symbols) {
@@ -191,7 +196,7 @@ export function symbolsByName(ws: Workspace): Map<string, SymbolEntry[]> {
     if (list) list.push(symbol);
     else grouped.set(symbol.name, [symbol]);
   }
-  symbolsByNameCache.set(ws, grouped);
+  symbolsByNameCache.set(ws.index, grouped);
   return grouped;
 }
 
