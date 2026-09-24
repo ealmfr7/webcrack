@@ -129,6 +129,50 @@ describe('wc_export', () => {
     expect(dot).toContain('"src/api.js" -> "src/sign.js";');
   });
 
+  test('a double rename exports under the original name', async () => {
+    const root = await makeTemp();
+    const ws = fixtureWorkspace();
+    ws.modules.set('3.js', {
+      path: '3.js',
+      bundleId: '3',
+      isEntry: false,
+      code: 'export function deriveKey2() {}\n',
+      tags: [],
+    });
+    ws.index.symbols.push({
+      module: '3.js',
+      name: 'deriveKey2',
+      kind: 'function',
+      line: 1,
+      endLine: 1,
+      params: [],
+      exported: true,
+      refCount: 0,
+    });
+    ws.index.imports['3.js'] = [];
+    ws.annotations = [
+      {
+        symbol: '3.js:deriveKey2',
+        rename: 'deriveKey2',
+        originalName: 'computeKey',
+        note: 'key derivation',
+      },
+      { symbol: 'src/sign.js:sign', note: 'hashing helper' },
+    ];
+    const { call } = await connectAt(root, ws);
+    const out = join(root, 'out');
+
+    await call('wc_export', {
+      workspace: 'fixture1',
+      dir: out,
+      include: ['notes'],
+    });
+    const notes = await readFile(join(out, 'notes.md'), 'utf8');
+    expect(notes).toContain('- computeKey → deriveKey2: key derivation');
+    expect(notes).not.toContain('deriveKey2 → deriveKey2');
+    expect(notes).toContain('- sign: hashing helper');
+  });
+
   test('default include writes code, report, notes and graph', async () => {
     const root = await makeTemp();
     const { call } = await connectAt(root, fixtureWorkspace());

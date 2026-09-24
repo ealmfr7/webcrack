@@ -421,13 +421,13 @@ describe('wc_annotate', () => {
 
     const outline = await call('wc_outline', { module: 'sign.js' });
     expect(outline).toContain('function hmacSign(value)');
-    expect(outline).toContain('renamed to hmacSign');
+    expect(outline).toContain('originally sign');
     expect(outline).toContain('HMAC with a hardcoded pepper');
 
     const read = await call('wc_read', { target: 'sign.js:hmacSign' });
     expect(read).toContain('function hmacSign');
     expect(read).toContain(
-      'Note on hmacSign: renamed to hmacSign · HMAC with a hardcoded pepper',
+      'Note on hmacSign: originally sign · HMAC with a hardcoded pepper',
     );
   });
 

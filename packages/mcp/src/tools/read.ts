@@ -69,7 +69,11 @@ function notesInRange(
     if (!annotation || seen.has(annotation)) continue;
     seen.add(annotation);
     const parts: string[] = [];
-    if (annotation.rename) parts.push(`renamed to ${annotation.rename}`);
+    if (annotation.originalName && annotation.originalName !== symbol.name) {
+      parts.push(`originally ${annotation.originalName}`);
+    } else if (annotation.rename) {
+      parts.push(`renamed to ${annotation.rename}`);
+    }
     if (annotation.note) parts.push(annotation.note);
     if (parts.length > 0) {
       notes.push(`Note on ${symbol.name}: ${parts.join(' · ')}`);
