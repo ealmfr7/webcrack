@@ -362,7 +362,7 @@ pisarse:
       grafos `.dot`).
 - [ ] **M3.2** Prompt MCP `audit`: guía el flujo abrir → map → findings →
       investigar (goto/refs/read/annotate) → informe final.
-- [ ] **M3.3** Resources MCP: `webcrack://<ws>/module/<ruta>` y
+- [x] **M3.3** Resources MCP: `webcrack://<ws>/module/<ruta>` y
       `webcrack://<ws>/report` para clientes que prefieran adjuntar recursos.
 - [ ] **M3.4** `wc_trace value=…`: seguir el flujo de un valor (dónde se
       construye una URL/token y qué función lo envía) usando refs + asignaciones.
