@@ -15,6 +15,26 @@ function graphJson(text: string): GraphJson {
   ) as GraphJson;
 }
 
+/** Declared nodes and `from -> to` edges in a dot body. */
+function dotGraph(text: string): {
+  nodes: Set<string>;
+  edges: { from: string; to: string }[];
+} {
+  const nodes = new Set<string>();
+  const edges: { from: string; to: string }[] = [];
+  const id = '((?:[^"\\\\]|\\\\.)*)';
+  for (const line of text.split('\n')) {
+    const edge = new RegExp(`^  "${id}" -> "${id}";$`).exec(line);
+    if (edge) {
+      edges.push({ from: edge[1], to: edge[2] });
+      continue;
+    }
+    const node = new RegExp(`^  "${id}";$`).exec(line);
+    if (node) nodes.add(node[1]);
+  }
+  return { nodes, edges };
+}
+
 function noBundleFirstModule(): Workspace {
   const ws = fixtureWorkspace();
   ws.bundle = undefined;
@@ -88,6 +108,35 @@ describe('wc_graph modules', () => {
     const text = await call('wc_graph', { kind: 'modules' });
     expect(text).toContain('modules graph from src/api.js');
   });
+
+  test('node cap keeps every edge endpoint inside the graph', async () => {
+    const ws = fixtureWorkspace();
+    for (let i = 0; i < 250; i++) {
+      const path = `src/fan${i}.js`;
+      ws.modules.set(path, {
+        path,
+        bundleId: `fan${i}`,
+        isEntry: false,
+        code: '',
+        tags: [],
+      });
+      ws.index.imports['src/api.js']?.push(path);
+      ws.index.imports[path] = [];
+    }
+    const { call } = await connect(ws);
+    const text = await call('wc_graph', {
+      kind: 'modules',
+      format: 'dot',
+      depth: 1,
+    });
+    expect(text).toContain('(capped)');
+    const graph = dotGraph(text);
+    expect(graph.nodes.size).toBe(200);
+    for (const edge of graph.edges) {
+      expect(graph.nodes.has(edge.from)).toBe(true);
+      expect(graph.nodes.has(edge.to)).toBe(true);
+    }
+  });
 });
 
 describe('wc_graph calls', () => {
@@ -151,6 +200,32 @@ describe('wc_graph calls', () => {
     await expect(
       call('wc_graph', { kind: 'calls', root: 'logni' }),
     ).rejects.toThrow('login');
+  });
+
+  test('node cap keeps every edge endpoint inside the graph', async () => {
+    const ws = fixtureWorkspace();
+    for (let i = 0; i < 250; i++) {
+      ws.index.calls.push({
+        module: 'src/api.js',
+        line: 5,
+        callee: `fanCall${i}`,
+        caller: 'login',
+      });
+    }
+    const { call } = await connect(ws);
+    const text = await call('wc_graph', {
+      kind: 'calls',
+      root: 'login',
+      format: 'dot',
+      depth: 1,
+    });
+    expect(text).toContain('(capped)');
+    const graph = dotGraph(text);
+    expect(graph.nodes.size).toBe(200);
+    for (const edge of graph.edges) {
+      expect(graph.nodes.has(edge.from)).toBe(true);
+      expect(graph.nodes.has(edge.to)).toBe(true);
+    }
   });
 
   test('json lists resolved nodes and leaf callees', async () => {

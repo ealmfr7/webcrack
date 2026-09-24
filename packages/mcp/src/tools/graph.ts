@@ -90,8 +90,8 @@ function buildModulesGraph(
     const current = queue.shift()!;
     if (current.depth >= depth) continue;
     for (const dep of ws.index.imports[current.id] ?? []) {
-      addEdge(graph, current.id, dep);
       if (addNode(graph, { id: dep, label: dep, module: dep })) {
+        addEdge(graph, current.id, dep);
         queue.push({ id: dep, depth: current.depth + 1 });
       }
     }
@@ -168,7 +168,7 @@ function buildCallsGraph(
         }
       }
       const id = target ? nodeId(target) : call.callee;
-      addEdge(graph, nodeId(current.symbol), id);
+      const from = nodeId(current.symbol);
       if (target) {
         if (
           addNode(graph, {
@@ -178,11 +178,12 @@ function buildCallsGraph(
             line: target.line,
           })
         ) {
+          addEdge(graph, from, id);
           queue.push({ symbol: target, depth: current.depth + 1 });
         }
-      } else {
+      } else if (addNode(graph, { id, label: id })) {
         // Unresolved leaf (a global or `*.x` member call), deduped.
-        addNode(graph, { id, label: id });
+        addEdge(graph, from, id);
       }
     }
   }
