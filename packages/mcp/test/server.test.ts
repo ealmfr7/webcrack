@@ -32,12 +32,12 @@ test('registers the audit prompt', async () => {
 test('tool errors are returned as actionable tool results', async () => {
   const { client } = await connect();
   const result = (await client.callTool({
-    name: 'wc_open',
-    arguments: { source: 'var a = 1;' },
+    name: 'wc_read',
+    arguments: { target: 'src/api.js' },
   })) as CallToolResult;
   expect(result.isError).toBe(true);
   expect(result.content).toEqual([
-    { type: 'text', text: expect.stringContaining('M1.3') as string },
+    { type: 'text', text: expect.stringContaining('No workspace is open') as string },
   ]);
 });
 
