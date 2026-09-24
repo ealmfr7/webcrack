@@ -348,7 +348,7 @@ pisarse:
       módulo, regenerar código, reindexar solo ese módulo, persistir en
       `annotations.json` y reaplicar al cargar de caché. Las notas se muestran
       en `wc_read`/`wc_outline` junto al símbolo.
-- [ ] **M2.4** `wc_deobfuscate` bajo demanda: pasar el `target` (con el
+- [x] **M2.4** `wc_deobfuscate` bajo demanda: pasar el `target` (con el
       contexto necesario del módulo) por webcrack/transformaciones de nuevo;
       `expression` evalúa en el sandbox (`createNodeSandbox`) con timeout.
       Muestra diff compacto; `apply=true` lo integra en el workspace.
