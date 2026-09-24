@@ -342,7 +342,7 @@ pisarse:
 
 - [x] **M2.1** `wc_refs` (callers / callees vía scope de Babel y el índice
       de llamadas; entre módulos vía imports).
-- [ ] **M2.2** `wc_graph` (`modules` con `moduleGraph`, `calls` con
+- [x] **M2.2** `wc_graph` (`modules` con `moduleGraph`, `calls` con
       `callGraph`), recortado por `root` + `depth`; formatos `tree`/`json`/`dot`.
 - [ ] **M2.3** `wc_annotate`: renames con `scope.rename` sobre el AST del
       módulo, regenerar código, reindexar solo ese módulo, persistir en
