@@ -129,12 +129,12 @@ describe('wc_export', () => {
     expect(dot).toContain('"src/api.js" -> "src/sign.js";');
   });
 
-  test('default include writes code, report and notes but no graph', async () => {
+  test('default include writes code, report, notes and graph', async () => {
     const root = await makeTemp();
     const { call } = await connectAt(root, fixtureWorkspace());
     const out = join(root, 'out');
 
-    await call('wc_export', { workspace: 'fixture1', dir: out });
+    const text = await call('wc_export', { workspace: 'fixture1', dir: out });
 
     expect(await readFile(join(out, 'modules', 'src', 'api.js'), 'utf8')).toBe(
       fixtureWorkspace().modules.get('src/api.js')?.code,
@@ -145,7 +145,9 @@ describe('wc_export', () => {
     expect(await readFile(join(out, 'notes.md'), 'utf8')).toContain(
       'No annotations',
     );
-    await expect(readFile(join(out, 'modules.dot'), 'utf8')).rejects.toThrow();
+    const dot = await readFile(join(out, 'modules.dot'), 'utf8');
+    expect(dot).toContain('digraph "modules from src/api.js" {');
+    expect(text).toContain('modules.dot');
   });
 
   test('a dir outside the roots is an error', async () => {

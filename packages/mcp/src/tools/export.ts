@@ -122,7 +122,7 @@ export const exportWorkspace = defineTool({
     dir: z
       .string()
       .describe('Output directory (must be inside the allowed roots).'),
-    include: z.array(includeItem).default(['code', 'report', 'notes']),
+    include: z.array(includeItem).default(['code', 'report', 'notes', 'graph']),
     overwrite: z
       .boolean()
       .default(false)
@@ -137,7 +137,12 @@ export const exportWorkspace = defineTool({
   },
   handler: async (args, ctx) => {
     const ws = ctx.store.get(args.workspace);
-    const include: IncludeItem[] = args.include ?? ['code', 'report', 'notes'];
+    const include: IncludeItem[] = args.include ?? [
+      'code',
+      'report',
+      'notes',
+      'graph',
+    ];
     const dir = await assertInsideRoots(args.dir, ctx.config);
     let entries;
     try {
