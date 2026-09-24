@@ -66,7 +66,7 @@ program
   .option(
     '--llm-timeout <ms>',
     'timeout in ms for the LLM rename command',
-    (value) => parseInt(value, 10),
+    (value) => Number(value),
     30000,
   )
   .argument('[files...]', 'input files, defaults to stdin')
