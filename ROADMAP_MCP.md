@@ -327,7 +327,7 @@ pisarse:
       simple y documentada; tests con el corpus.
 - [x] **M1.5** `wc_outline` y `wc_read` (todos los formatos de `target`,
       `view=raw` sobre el original por rango de líneas).
-- [ ] **M1.6** `wc_search` con `text`, `regex`, `string`, `identifier`,
+- [x] **M1.6** `wc_search` con `text`, `regex`, `string`, `identifier`,
       `call`. (El modo `ast` va en M2.5.)
 - [ ] **M1.7** `wc_findings` (todas las categorías de §4) y `wc_goto`.
       La lógica compartida de findings vive en `workspace/findings.ts`
