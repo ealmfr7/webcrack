@@ -70,6 +70,20 @@ await result.save('output-dir');
 
 [API Reference](https://webcrack.netlify.app/docs/guide/api.html)
 
+## MCP server
+
+webcrack ships an [MCP server](packages/mcp/README.md) (`@webcrack/mcp`) that
+turns it into a reverse-engineering explorer for agents: open a bundle,
+search, navigate, deobfuscate on demand, annotate and export.
+
+```bash
+pnpm install && pnpm build
+claude mcp add webcrack -- node /abs/path/to/webcrack/packages/mcp/dist/index.js
+```
+
+See [packages/mcp/README.md](packages/mcp/README.md) for the full setup,
+tools, resources and security model.
+
 ## Donations
 
 If this project has helped you, consider donating to support its development:
