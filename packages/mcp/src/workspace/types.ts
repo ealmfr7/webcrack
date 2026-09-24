@@ -133,7 +133,8 @@ export interface StringLiteralEntry {
 export type RefKind = 'read' | 'write' | 'call';
 
 /**
- * Declaration sites and import-specifier sites are NOT refs: `refCount`
+ * Declaration sites, import-specifier sites, and local export-specifier
+ * sites (`export { x }`, `export { x as y }`) are NOT refs: `refCount`
  * counts only uses whose `defModule`/`defLine`/`name` match the symbol.
  */
 export interface RefEntry {

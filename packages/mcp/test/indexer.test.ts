@@ -143,16 +143,8 @@ describe('symbols', () => {
     expect(symbolsOf(index, 'src/e.js')).toMatchObject([
       { name: 'hidden', kind: 'function', exported: true },
     ]);
-    expect(index.refs).toEqual([
-      {
-        module: 'src/e.js',
-        line: 2,
-        name: 'hidden',
-        defModule: 'src/e.js',
-        defLine: 1,
-        kind: 'read',
-      },
-    ]);
+    // The local side of an export specifier is not a use.
+    expect(index.refs).toEqual([]);
   });
 
   test('no locals or params leak into symbols', () => {
@@ -712,9 +704,32 @@ describe('export aliases', () => {
     for (const ref of index.refs) {
       expect(ref).toMatchObject({ defModule: 'src/exp.js', defLine: 1 });
     }
-    // Same-module refs (call + export-specifier read) plus both importers.
-    expect(def).toMatchObject({ refCount: 4 });
+    // Same-module call plus both importers (the export-specifier alias
+    // is not a ref).
+    expect(def).toMatchObject({ refCount: 3 });
   });
+
+  test.each([
+    ['export-declared', 'export function fn() {}\nfn();\n'],
+    ['specifier-exported', 'function fn() {}\nexport { fn };\nfn();\n'],
+  ])(
+    'refCount is stable across an annotate-style rename (%s)',
+    (_label, code) => {
+      const beforeDef = build({ 'src/m.js': code }).symbols.find(
+        (s) => s.module === 'src/m.js' && s.name === 'fn',
+      );
+      expect(beforeDef).toMatchObject({ exported: true, refCount: 1 });
+
+      // What `wc_annotate` leaves behind: the definition carries the new
+      // name while the old one stays a stable export alias.
+      const afterDef = build({
+        'src/m.js':
+          'function newName() {}\nexport { newName as fn };\nnewName();\n',
+      }).symbols.find((s) => s.module === 'src/m.js' && s.name === 'newName');
+      expect(afterDef).toMatchObject({ exported: true });
+      expect(afterDef?.refCount).toBe(beforeDef?.refCount);
+    },
+  );
 
   test('same-name specifiers record no alias', () => {
     const index = build({
