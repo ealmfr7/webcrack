@@ -69,3 +69,29 @@ test('plain property writes are not symbols; goto on them falls back to approxim
   expect(count).toContain('ns.js:5  definition');
   expect(count).not.toContain('ns.js:7  definition');
 });
+
+test('modules containing TypeScript enums restored by webcrack still index', async () => {
+  const ws = fixtureWorkspace();
+  ws.modules.clear();
+  ws.modules.set('enum.js', {
+    path: 'enum.js',
+    bundleId: '0',
+    isEntry: true,
+    code: [
+      'enum WireType {',
+      '  Varint = 0,',
+      '  Bit64 = 1,',
+      '}',
+      'function encode(v) {',
+      '  return fetch("/x", { body: v, type: WireType.Varint });',
+      '}',
+      'encode(1);',
+    ].join('\n'),
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  expect(ws.index.symbols.map((s) => s.name)).toContain('encode');
+  const { call } = await connect(ws);
+  expect(await call('wc_goto', { symbol: 'encode' })).toContain('enum.js:5');
+  expect(await call('wc_refs', { symbol: 'encode' })).toContain('enum.js:8');
+});

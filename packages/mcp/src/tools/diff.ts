@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import { createHash } from 'node:crypto';
@@ -6,6 +5,7 @@ import { z } from 'zod';
 import { paginate, textResult } from '../format/response';
 import type { ModuleEntry, Workspace } from '../workspace/types';
 import { defineTool, pagination, readOnly } from './define';
+import { parseClean } from '../workspace/parse';
 
 /**
  * Structural hashes, keyed by module entry and invalidated when the module
@@ -78,7 +78,7 @@ function normalizeIdentifiers(ast: t.File): void {
 /** sha1 of the AST normalized without locations, comments, raw text or identifier names. */
 function hashCode(code: string): string {
   try {
-    const ast = parse(code, {
+    const ast = parseClean(code, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       errorRecovery: true,

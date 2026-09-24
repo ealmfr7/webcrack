@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -29,6 +28,7 @@ import type {
   Workspace,
   WorkspaceIndex,
 } from './types';
+import { parseClean } from './parse';
 
 /**
  * Per-module index slices keyed by workspace, backing incremental `commit`.
@@ -108,6 +108,13 @@ function resolveWebcrackVersion(): string {
 }
 
 const WEBCRACK_VERSION = resolveWebcrackVersion();
+
+/**
+ * When the unpacked modules hold less than this share of webcrack's output
+ * code, the bundle was a small part of the input and the host code is kept
+ * as an extra module (`bundle-host.js`) instead of being dropped.
+ */
+const HOST_CODE_MIN_COVERAGE = 0.5;
 
 function computeId(
   code: string,
@@ -213,7 +220,7 @@ function analyzeModule(
   modulePath: string,
   code: string,
 ): { report: Report; interpreters: InterpreterSummary[] } {
-  const ast = parse(code, {
+  const ast = parseClean(code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
     errorRecovery: true,
@@ -367,6 +374,25 @@ export class WorkspaceStore {
         });
       }
       bundle = { type: result.bundle.type, entryId: result.bundle.entryId };
+      // Never lose code: a small bundle embedded in a large script (a worker
+      // runtime inside a 9 MB app chunk, or a runtime with no modules) is
+      // detected as "the" bundle, and its modules cover only a sliver of
+      // the input. Keep the rest as a module of its own.
+      let moduleChars = 0;
+      for (const module of modules.values()) moduleChars += module.code.length;
+      if (moduleChars < result.code.length * HOST_CODE_MIN_COVERAGE) {
+        let hostPath = 'bundle-host.js';
+        for (let n = 2; modules.has(hostPath); n++) {
+          hostPath = `bundle-host-${n}.js`;
+        }
+        modules.set(hostPath, {
+          path: hostPath,
+          bundleId: hostPath,
+          isEntry: modules.size === 0,
+          code: result.code,
+          tags: [],
+        });
+      }
     } else {
       modules.set('main.js', {
         path: 'main.js',

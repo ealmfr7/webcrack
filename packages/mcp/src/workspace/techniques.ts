@@ -1,6 +1,7 @@
 import { parse } from '@babel/parser';
 import { detectInterpreters } from 'webcrack/analysis';
 import type { InterpreterSummary } from './types';
+import { parseClean } from './parse';
 
 /**
  * Obfuscation-technique detection for the `wc_open` overview
@@ -219,7 +220,7 @@ export function detectTechniques(
     // Re-run the real heuristic on the clean code; an unparseable clean
     // tree keeps the label without the `(removed)` marker.
     try {
-      const ast = parse(clean, {
+      const ast = parseClean(clean, {
         sourceType: 'unambiguous',
         allowReturnOutsideFunction: true,
         errorRecovery: true,

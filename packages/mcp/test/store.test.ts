@@ -824,3 +824,59 @@ test('techniques survive reopening without calling the detector again', async ()
     first.workspace.stats.techniques,
   );
 });
+
+test('code outside a small embedded bundle is kept as bundle-host.js', async () => {
+  const host = [
+    'function app() { return "compositeStoryId"; }',
+    ...Array.from({ length: 200 }, (_, i) => `var filler${i} = ${i};`),
+  ].join('\n');
+  const cases: Array<[string, Map<string, unknown>]> = [
+    [
+      'tiny bundle',
+      new Map([
+        [
+          '0',
+          { id: '0', path: './0.js', isEntry: true, code: 'exports.a = 1;' },
+        ],
+      ]),
+    ],
+    ['no modules', new Map<string, unknown>()],
+  ];
+  for (const [label, bundleModules] of cases) {
+    const config = await makeConfig();
+    const deps = testDeps({
+      buildIndex: realBuildIndex,
+      loadSource: (): Promise<LoadedSource> =>
+        Promise.resolve({
+          kind: 'code',
+          label: '<synthetic>',
+          code: host,
+          bytes: host.length,
+        }),
+      webcrack: (() =>
+        Promise.resolve({
+          code: host,
+          bundle: { type: 'webpack', entryId: '0', modules: bundleModules },
+          save: () => Promise.resolve(),
+        })) as unknown as StoreDeps['webcrack'],
+    });
+    const { workspace } = await new WorkspaceStore(config, deps).open(
+      host,
+      {},
+      progressRecorder().fn,
+    );
+    expect(moduleCode(workspace, 'bundle-host.js'), label).toContain(
+      'compositeStoryId',
+    );
+    expect(workspace.modules.size, label).toBe(bundleModules.size + 1);
+  }
+});
+
+test('a bundle covering the code does not duplicate it as bundle-host.js', async () => {
+  const config = await makeConfig();
+  const { workspace } = await new WorkspaceStore(
+    config,
+    realIndexDeps({ 'a.js': 'export const alpha = 1;\n' }),
+  ).open('<bundle>', {}, progressRecorder().fn);
+  expect([...workspace.modules.keys()]).toEqual(['a.js']);
+});

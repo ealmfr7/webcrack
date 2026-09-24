@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser';
 import traverse, {
   type Binding,
   type NodePath,
@@ -12,6 +11,7 @@ import { parseTarget, resolveModule, resolveSymbol } from '../format/target';
 import type { ModuleEntry, SymbolEntry, Workspace } from '../workspace/types';
 import { approximateSymbolMatches } from '../workspace/approximate';
 import { defineTool, readOnly, workspaceArg } from './define';
+import { parseClean } from '../workspace/parse';
 
 export const trace = defineTool({
   name: 'wc_trace',
@@ -103,7 +103,7 @@ function getAst(entry: ModuleEntry): File | undefined {
   let ast: File;
   try {
     // Same parse options as store.ts so line numbers match the index.
-    ast = parse(entry.code, {
+    ast = parseClean(entry.code, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       errorRecovery: true,

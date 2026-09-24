@@ -1,9 +1,9 @@
-import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import type { Binding, NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import { WcError } from '../format/errors';
 import type { Annotation, SymbolEntry, Workspace } from './types';
+import { parseClean } from './parse';
 
 interface Edit {
   start: number;
@@ -78,7 +78,7 @@ export function renameSymbol(
     );
   }
 
-  const ast = parse(entry.code, {
+  const ast = parseClean(entry.code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
     errorRecovery: true,

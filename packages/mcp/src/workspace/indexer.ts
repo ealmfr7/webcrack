@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import type { NodePath } from '@babel/traverse';
 import type {
@@ -26,13 +25,14 @@ import type {
   SymbolScope,
   WorkspaceIndex,
 } from './types';
+import { parseClean } from './parse';
 
 /**
  * Bump whenever the index built from the same code changes (new symbol
  * kinds, scopes, ref rules). It is part of the workspace id, so caches
  * written by an older indexer are rebuilt instead of served stale.
  */
-export const INDEX_VERSION = '7';
+export const INDEX_VERSION = '8';
 
 /**
  * Index one module's clean code (M1.2): re-parse it and extract the
@@ -49,7 +49,7 @@ export function indexModule(
   const empty = emptyModuleIndex();
   let ast: File;
   try {
-    ast = parse(module.code, {
+    ast = parseClean(module.code, {
       sourceType: 'unambiguous',
       errorRecovery: true,
       plugins: ['jsx'],

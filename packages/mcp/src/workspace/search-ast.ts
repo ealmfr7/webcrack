@@ -3,6 +3,7 @@ import type { File, Node } from '@babel/types';
 import { WcError } from '../format/errors';
 import { matchModules } from '../format/target';
 import type { ModuleEntry, SearchHit, Workspace } from './types';
+import { parseClean } from './parse';
 
 /**
  * AST-pattern search (M2.5): match a JS pattern with `$X` / `$$ARGS`
@@ -40,7 +41,7 @@ const astCache = new WeakMap<ModuleEntry, { code: string; ast: File }>();
 function getModuleAst(entry: ModuleEntry): File {
   const cached = astCache.get(entry);
   if (cached !== undefined && cached.code === entry.code) return cached.ast;
-  const ast = parse(entry.code, {
+  const ast = parseClean(entry.code, {
     sourceType: 'unambiguous',
     errorRecovery: true,
     plugins: ['jsx'],

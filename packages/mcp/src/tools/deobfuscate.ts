@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser';
 import { VISITOR_KEYS } from '@babel/types';
 import type { File, Node } from '@babel/types';
 import { z } from 'zod';
@@ -9,6 +8,7 @@ import { resolveTarget } from '../format/target';
 import { evaluateInModule } from '../workspace/sandbox';
 import type { ModuleEntry, Workspace } from '../workspace/types';
 import { defineTool, workspaceArg } from './define';
+import { parseClean } from '../workspace/parse';
 
 const PASS_NAMES = [
   'deobfuscate',
@@ -136,7 +136,7 @@ function widenToStatements(
   let to = Math.min(end, lines.length);
   while (from < to && blank(lines[from - 1])) from++;
   while (to > from && blank(lines[to - 1])) to--;
-  const ast = parse(entry.code, {
+  const ast = parseClean(entry.code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
     errorRecovery: true,
@@ -176,7 +176,7 @@ function templateContinuationLines(code: string): Set<number> {
   if (!code.includes('`')) return inner;
   let ast: File;
   try {
-    ast = parse(code, {
+    ast = parseClean(code, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       errorRecovery: true,
@@ -241,7 +241,7 @@ function extractSlice(ws: Workspace, target: string): Slice {
 
 function sliceParses(slice: string): boolean {
   try {
-    parse(slice, {
+    parseClean(slice, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       plugins: ['jsx'],
