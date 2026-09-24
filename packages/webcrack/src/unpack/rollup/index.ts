@@ -103,7 +103,10 @@ function regionMarker(
   if (!comments) return undefined;
   let marker: string | undefined;
   for (const comment of comments) {
-    if (comment.type === 'CommentLine' && REGION_PATH.test(comment.value.trim())) {
+    if (
+      comment.type === 'CommentLine' &&
+      REGION_PATH.test(comment.value.trim())
+    ) {
       marker = comment.value;
     }
   }
@@ -214,26 +217,26 @@ function collectDependencies(statements: t.Statement[]): string[] {
   const dependencies: string[] = [];
   const seen = new Set<string>();
   // Read-only traversal over the same nodes (no scope needed)
-  traverse(
-    t.file(t.program(statements)),
-    {
-      ImportDeclaration(path) {
-        addDep(path.node.source.value);
-      },
-      ExportNamedDeclaration(path) {
-        if (path.node.source) addDep(path.node.source.value);
-      },
-      ExportAllDeclaration(path) {
-        addDep(path.node.source.value);
-      },
-      CallExpression(path) {
-        if (path.node.callee.type === 'Import' && path.node.arguments.length > 0) {
-          const [first] = path.node.arguments;
-          if (t.isStringLiteral(first)) addDep(first.value);
-        }
-      },
+  traverse(t.file(t.program(statements)), {
+    ImportDeclaration(path) {
+      addDep(path.node.source.value);
     },
-  );
+    ExportNamedDeclaration(path) {
+      if (path.node.source) addDep(path.node.source.value);
+    },
+    ExportAllDeclaration(path) {
+      addDep(path.node.source.value);
+    },
+    CallExpression(path) {
+      if (
+        path.node.callee.type === 'Import' &&
+        path.node.arguments.length > 0
+      ) {
+        const [first] = path.node.arguments;
+        if (t.isStringLiteral(first)) addDep(first.value);
+      }
+    },
+  });
   return dependencies;
 
   function addDep(specifier: string): void {

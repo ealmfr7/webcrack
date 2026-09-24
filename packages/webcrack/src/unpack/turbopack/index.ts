@@ -53,7 +53,8 @@ function matchPushArray(node: t.Node): t.ArrayExpression | undefined {
   const { callee } = node;
   if (!t.isMemberExpression(callee)) return undefined;
   if (callee.computed) {
-    if (!t.isStringLiteral(callee.property, { value: 'push' })) return undefined;
+    if (!t.isStringLiteral(callee.property, { value: 'push' }))
+      return undefined;
   } else if (!t.isIdentifier(callee.property, { name: 'push' })) {
     return undefined;
   }
@@ -201,7 +202,10 @@ function stripContextDestructures(
  * no-arg IIFE (`() => (() => {...})()`) are unwrapped so the module keeps
  * only its own statements.
  */
-function factoryStatements(factory: Factory, context: string | undefined): t.Statement[] {
+function factoryStatements(
+  factory: Factory,
+  context: string | undefined,
+): t.Statement[] {
   const { body } = factory;
   let statements: t.Statement[];
   if (!t.isBlockStatement(body)) {
@@ -225,7 +229,10 @@ function factoryStatements(factory: Factory, context: string | undefined): t.Sta
     statements = stripContextDestructures(body.body, context);
     if (statements.length === 1) {
       const [only] = statements;
-      if (t.isExpressionStatement(only) && t.isCallExpression(only.expression)) {
+      if (
+        t.isExpressionStatement(only) &&
+        t.isCallExpression(only.expression)
+      ) {
         const { callee, arguments: args } = only.expression;
         if (
           (t.isFunctionExpression(callee) ||
@@ -324,9 +331,7 @@ function rewriteRequires(
         const isImport = !isRequire && names.import.has(callee.name);
         if (!isRequire && !isImport) return;
         rewriteCall(path.node, isRequire, () => {
-          path.node.callee = isImport
-            ? t.import()
-            : t.identifier('require');
+          path.node.callee = isImport ? t.import() : t.identifier('require');
         });
         return;
       }

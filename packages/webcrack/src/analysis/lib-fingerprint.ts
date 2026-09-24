@@ -79,7 +79,10 @@ function isNode(value: unknown): value is t.Node {
  * `{ key: … }`, methods), so those are kept while everything else
  * (declarations, references, function/class ids, labels) is stripped.
  */
-function keepName(parent: t.Node | undefined, key: string | undefined): boolean {
+function keepName(
+  parent: t.Node | undefined,
+  key: string | undefined,
+): boolean {
   if (!parent || key === undefined) return false;
   if (
     (t.isMemberExpression(parent) || t.isOptionalMemberExpression(parent)) &&

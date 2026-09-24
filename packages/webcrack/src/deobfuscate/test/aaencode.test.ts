@@ -242,9 +242,7 @@ describe('aaencode lookalikes are never evaluated', () => {
     const input = `var unrelated = 1;\n${code}`;
     const { code: output, changes } = await runAaencode(input, sandbox);
     expect(changes).toBe(1);
-    expect(output).toBe(
-      `var unrelated = 1;\nFunction("alert(1);")();`,
-    );
+    expect(output).toBe(`var unrelated = 1;\nFunction("alert(1);")();`);
     expect(calls).toHaveLength(1);
   });
 });

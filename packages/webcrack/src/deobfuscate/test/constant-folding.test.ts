@@ -48,8 +48,7 @@ test('fold comparisons of literals', () => {
 test('fold mixed string and number coercion', () =>
   expectJS(`x = 1 + "2";`).toMatchInlineSnapshot(`x = "12";`));
 
-test('keep -0 correct', () =>
-  expectJS(`0 / -1;`).toMatchInlineSnapshot(`-0;`));
+test('keep -0 correct', () => expectJS(`0 / -1;`).toMatchInlineSnapshot(`-0;`));
 
 test('do not fold NaN or Infinity', () => {
   expectJS(`0 / 0;`).toMatchInlineSnapshot(`0 / 0;`);

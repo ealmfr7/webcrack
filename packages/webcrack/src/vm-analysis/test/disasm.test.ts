@@ -100,12 +100,31 @@ describe('disassemble', () => {
     const result = disassemble(found[0], labelHandlers(found[0]));
 
     expect(result.instructions).toEqual([
-      { offset: 0, opcode: 0, mnemonic: 'push-const', operands: [10], unknown: false },
+      {
+        offset: 0,
+        opcode: 0,
+        mnemonic: 'push-const',
+        operands: [10],
+        unknown: false,
+      },
       { offset: 2, opcode: 99, mnemonic: 'db', operands: [], unknown: true },
       { offset: 3, opcode: 1, mnemonic: 'binop', operands: [], unknown: false },
-      { offset: 4, opcode: 3, mnemonic: 'jump', operands: [0], unknown: false, target: 0 },
+      {
+        offset: 4,
+        opcode: 3,
+        mnemonic: 'jump',
+        operands: [0],
+        unknown: false,
+        target: 0,
+      },
       { offset: 6, opcode: 2, mnemonic: 'pop', operands: [], unknown: false },
-      { offset: 7, opcode: 4, mnemonic: 'return', operands: [], unknown: false },
+      {
+        offset: 7,
+        opcode: 4,
+        mnemonic: 'return',
+        operands: [],
+        unknown: false,
+      },
     ]);
     expect(result.text).toMatchSnapshot();
     // Instructions are plain JSON data.
@@ -120,9 +139,28 @@ describe('disassemble', () => {
     const result = disassemble(found[0], labelHandlers(found[0]));
 
     expect(result.instructions).toEqual([
-      { offset: 0, opcode: 0, mnemonic: 'push-const', operands: [1], unknown: false },
-      { offset: 2, opcode: 4, mnemonic: 'cond-jump', operands: [5], unknown: false, target: 5 },
-      { offset: 4, opcode: 2, mnemonic: 'return', operands: [], unknown: false },
+      {
+        offset: 0,
+        opcode: 0,
+        mnemonic: 'push-const',
+        operands: [1],
+        unknown: false,
+      },
+      {
+        offset: 2,
+        opcode: 4,
+        mnemonic: 'cond-jump',
+        operands: [5],
+        unknown: false,
+        target: 5,
+      },
+      {
+        offset: 4,
+        opcode: 2,
+        mnemonic: 'return',
+        operands: [],
+        unknown: false,
+      },
       { offset: 5, opcode: 3, mnemonic: 'db', operands: [], unknown: true },
     ]);
     expect(result.text).toContain('cond-jump L_0005');
@@ -136,8 +174,20 @@ describe('disassemble', () => {
     expect(found).toHaveLength(1);
     const result = disassemble(found[0], labelHandlers(found[0]), [0, 7, 1]);
     expect(result.instructions).toEqual([
-      { offset: 0, opcode: 0, mnemonic: 'push-const', operands: [7], unknown: false },
-      { offset: 2, opcode: 1, mnemonic: 'return', operands: [], unknown: false },
+      {
+        offset: 0,
+        opcode: 0,
+        mnemonic: 'push-const',
+        operands: [7],
+        unknown: false,
+      },
+      {
+        offset: 2,
+        opcode: 1,
+        mnemonic: 'return',
+        operands: [],
+        unknown: false,
+      },
     ]);
   });
 
