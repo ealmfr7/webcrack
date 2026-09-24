@@ -121,7 +121,9 @@ test('metro ignores a locally declared __d', () => {
 
 test('metro ignores non-metro __d shapes', () => {
   // 0-param factory, no deps array
-  expect(unpackCode('__d(function () { console.log(1); }, 1);')).toBeUndefined();
+  expect(
+    unpackCode('__d(function () { console.log(1); }, 1);'),
+  ).toBeUndefined();
   // 2-param factory even with a deps array
   expect(
     unpackCode('__d(function (a, b) { return a(b[0]); }, 2, [3]);'),

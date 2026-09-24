@@ -144,7 +144,10 @@ function isGenericSecret(candidate: string): boolean {
   if (/^[0-9a-fA-F-]+$/.test(candidate)) return false;
   if (/^(sha\d+|md5)-/i.test(candidate)) return false;
   // Long pure-base64 blobs are almost always inlined assets, not keys.
-  if (candidate.length > LONG_BASE64_CUTOFF && /^[A-Za-z0-9+/=]+$/.test(candidate)) {
+  if (
+    candidate.length > LONG_BASE64_CUTOFF &&
+    /^[A-Za-z0-9+/=]+$/.test(candidate)
+  ) {
     return false;
   }
   if (!/[A-Za-z]/.test(candidate)) return false;
@@ -177,7 +180,8 @@ const SECRET_RULES: SecretRule[] = [
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const IPV4_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const IPV6_PATTERN = /\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b/g;
-const API_PATH_PATTERN = /\/api(?=$|[/\s"'`?#])(\/[\w\-._~:/?#[\]@!$&'()*+,;=%]*)?/g;
+const API_PATH_PATTERN =
+  /\/api(?=$|[/\s"'`?#])(\/[\w\-._~:/?#[\]@!$&'()*+,;=%]*)?/g;
 
 function validIpv4(ip: string): boolean {
   return ip.split('.').every((octet) => {
@@ -217,7 +221,9 @@ function isMember(
   return t.isMemberExpression(node) || t.isOptionalMemberExpression(node);
 }
 
-function propName(member: t.MemberExpression | t.OptionalMemberExpression): string | null {
+function propName(
+  member: t.MemberExpression | t.OptionalMemberExpression,
+): string | null {
   const prop = member.property;
   if (!member.computed && t.isIdentifier(prop)) return prop.name;
   if (t.isStringLiteral(prop)) return prop.value;
@@ -232,24 +238,43 @@ function objectName(obj: t.MemberExpression['object']): string | null {
   return null;
 }
 
+/** Receivers whose `.fetch(url, ...)` is the global `fetch`. */
+const FETCH_RECEIVERS = new Set(['window', 'globalThis', 'self']);
+
 /**
  * Extract `{ method, url }` from a `fetch`/`axios`/`$.ajax` style call.
  * Non-static parts come back as `null`.
+ *
+ * `isGlobal` reports whether a name resolves to the global scope (no
+ * shadowing binding): bare `fetch(...)` and `window`/`globalThis`/`self`
+ * receivers only count when unshadowed, so `db.fetch(...)` or a local
+ * `fetch` binding is never reported as a network endpoint.
  */
 function endpointFromCall(
   callee: t.Expression | t.V8IntrinsicIdentifier,
   args: (t.Expression | t.SpreadElement | t.ArgumentPlaceholder)[],
+  isGlobal: (name: string) => boolean = () => true,
 ): EndpointEntry | null {
   const arg = (i: number): t.Node | null =>
-    i < args.length && !t.isSpreadElement(args[i]) ? (args[i]) : null;
+    i < args.length && !t.isSpreadElement(args[i]) ? args[i] : null;
 
   // fetch(url, { method })
   if (t.isIdentifier(callee) && callee.name === 'fetch') {
+    if (!isGlobal('fetch')) return null;
     const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
-  // window.fetch(url, ...) — same shape as fetch
+  // window.fetch(url, ...) — same shape as fetch, other receivers (e.g.
+  // `db.fetch(...)`) are not the global fetch.
   if (isMember(callee) && propName(callee) === 'fetch') {
+    const receiver = callee.object;
+    if (
+      !t.isIdentifier(receiver) ||
+      !FETCH_RECEIVERS.has(receiver.name) ||
+      !isGlobal(receiver.name)
+    ) {
+      return null;
+    }
     const method = configMethod(arg(1), ['method'], 'GET');
     return { method, url: staticString(arg(0)), line: 0, column: 0 };
   }
@@ -338,7 +363,10 @@ function endpointFromCall(
   return null;
 }
 
-function staticPropNode(obj: t.ObjectExpression, names: string[]): t.Node | null {
+function staticPropNode(
+  obj: t.ObjectExpression,
+  names: string[],
+): t.Node | null {
   for (const prop of obj.properties) {
     if (
       t.isObjectProperty(prop) &&
@@ -417,22 +445,26 @@ export function extractReport(ast: t.File): Report {
       }
     }
     if (!named && isGenericSecret(value)) {
-      pushUnique(report.secrets, seenSecrets, `generic-high-entropy\n${value}`, {
-        value,
-        rule: 'generic-high-entropy',
-        ...pos(node),
-      });
+      pushUnique(
+        report.secrets,
+        seenSecrets,
+        `generic-high-entropy\n${value}`,
+        {
+          value,
+          rule: 'generic-high-entropy',
+          ...pos(node),
+        },
+      );
     }
   };
 
   const addInteresting = (value: string, node: t.Node): void => {
     for (const match of value.matchAll(EMAIL_PATTERN)) {
-      pushUnique(
-        report.interesting,
-        seenInteresting,
-        `email\n${match[0]}`,
-        { value: match[0], kind: 'email', ...pos(node) },
-      );
+      pushUnique(report.interesting, seenInteresting, `email\n${match[0]}`, {
+        value: match[0],
+        kind: 'email',
+        ...pos(node),
+      });
     }
     for (const match of value.matchAll(IPV4_PATTERN)) {
       if (!validIpv4(match[0])) continue;
@@ -466,6 +498,49 @@ export function extractReport(ast: t.File): Report {
     addInteresting(value, node);
   };
 
+  // Shared by CallExpression and OptionalCallExpression so `f?.(url)` and
+  // `RegExp?.("src")` are handled exactly like their non-optional forms.
+  const scanCall = (
+    callee: t.Expression | t.V8IntrinsicIdentifier,
+    args: (t.Expression | t.SpreadElement | t.ArgumentPlaceholder)[],
+    node: t.Node,
+    isGlobal: (name: string) => boolean,
+  ): void => {
+    const entry = endpointFromCall(callee, args, isGlobal);
+    if (entry) {
+      const at = pos(node);
+      entry.line = at.line;
+      entry.column = at.column;
+      pushUnique(
+        report.endpoints,
+        seenEndpoints,
+        `${entry.method ?? ''}\n${entry.url ?? ''}`,
+        entry,
+      );
+    }
+    // new RegExp("src", "flags") handled under NewExpression; also allow
+    // direct RegExp("src") calls here.
+    if (
+      t.isIdentifier(callee) &&
+      callee.name === 'RegExp' &&
+      args.length > 0 &&
+      !t.isSpreadElement(args[0])
+    ) {
+      const source = staticString(args[0]);
+      const flags =
+        args.length > 1 && !t.isSpreadElement(args[1])
+          ? (staticString(args[1]) ?? '')
+          : '';
+      if (source !== null) {
+        const value = `/${source}/${flags}`;
+        pushUnique(report.regexes, seenRegexes, value, {
+          value,
+          ...pos(node),
+        });
+      }
+    }
+  };
+
   traverse(ast, {
     StringLiteral(path) {
       scanString(path.node.value, path.node);
@@ -485,61 +560,17 @@ export function extractReport(ast: t.File): Report {
       });
     },
     CallExpression(path) {
-      const entry = endpointFromCall(
-        path.node.callee,
-        path.node.arguments,
-      );
-      if (entry) {
-        const at = pos(path.node);
-        entry.line = at.line;
-        entry.column = at.column;
-        pushUnique(
-          report.endpoints,
-          seenEndpoints,
-          `${entry.method ?? ''}\n${entry.url ?? ''}`,
-          entry,
-        );
-      }
-      // new RegExp("src", "flags") handled under NewExpression; also allow
-      // direct RegExp("src") calls here.
-      const callee = path.node.callee;
-      if (
-        t.isIdentifier(callee) &&
-        callee.name === 'RegExp' &&
-        path.node.arguments.length > 0 &&
-        !t.isSpreadElement(path.node.arguments[0])
-      ) {
-        const source = staticString(path.node.arguments[0]);
-        const flags =
-          path.node.arguments.length > 1 &&
-          !t.isSpreadElement(path.node.arguments[1])
-            ? (staticString(path.node.arguments[1]) ?? '')
-            : '';
-        if (source !== null) {
-          const value = `/${source}/${flags}`;
-          pushUnique(report.regexes, seenRegexes, value, {
-            value,
-            ...pos(path.node),
-          });
-        }
-      }
+      // NB: `hasBinding` is wrong here — it returns true for names on
+      // Babel's known-globals list (e.g. `globalThis`). `getBinding`
+      // only finds real bindings, i.e. actual shadowing declarations.
+      const isGlobal = (name: string): boolean =>
+        path.scope.getBinding(name) === undefined;
+      scanCall(path.node.callee, path.node.arguments, path.node, isGlobal);
     },
     OptionalCallExpression(path) {
-      const entry = endpointFromCall(
-        path.node.callee,
-        path.node.arguments,
-      );
-      if (entry) {
-        const at = pos(path.node);
-        entry.line = at.line;
-        entry.column = at.column;
-        pushUnique(
-          report.endpoints,
-          seenEndpoints,
-          `${entry.method ?? ''}\n${entry.url ?? ''}`,
-          entry,
-        );
-      }
+      const isGlobal = (name: string): boolean =>
+        path.scope.getBinding(name) === undefined;
+      scanCall(path.node.callee, path.node.arguments, path.node, isGlobal);
     },
     NewExpression(path) {
       const callee = path.node.callee;

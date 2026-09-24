@@ -57,7 +57,7 @@ const configs = [
     format: 'cjs',
   },
   {
-    entryPoints: ['src/cli.ts'],
+    entryPoints: ['src/cli.ts', 'src/cli-lib.ts'],
     bundle: false,
   },
 ];

@@ -64,6 +64,78 @@ entry.path; // './index.js'
 entry.code; // 'const a = require("./1.js");'
 ```
 
+## Result Fields
+
+Besides `code` and `bundle`, the result carries the opt-in analysis outputs.
+See [Analysis](../concepts/analysis.md) for details and examples.
+
+```js
+const result = await webcrack(code, { report: true, graph: true });
+
+result.report; // { urls, endpoints, secrets, regexes, interesting }
+result.moduleGraph; // { nodes, edges } — only when a bundle was found
+result.callGraph; // { nodes, edges }
+```
+
+With `sourceMap: true`, `result.map` holds a version 3 source map of the
+deobfuscated code back to the input (`sources: ['input.js']`, with
+`sourcesContent`). With `trace: true`, `result.trace` holds one entry per
+pipeline stage (`{ name, changes, diff }`, with a unified line diff).
+
+`save()` writes everything to the output directory:
+
+- `deobfuscated.js` (plus `deobfuscated.js.map` and a `sourceMappingURL`
+  comment when `sourceMap` is enabled)
+- the unpacked bundle (`bundle.json` and the modules)
+- `report.json` (when `report` is enabled)
+- `graph.modules.json` / `graph.modules.dot` (when `graph` is enabled and a
+  bundle was found) and `graph.calls.json` / `graph.calls.dot`
+- `trace.diff` (when `trace` is enabled)
+
+> [!NOTE]
+> Tracing is reentrant on Node.js (each call collects only its own entries
+> via `AsyncLocalStorage`), so concurrent `webcrack()` calls with `trace`
+> enabled are supported. Where `AsyncLocalStorage` is unavailable (e.g.
+> browsers) tracing falls back to a single module-global tracer, so
+> overlapping async calls may observe each other's entries there.
+
+## Named Exports
+
+```js
+import {
+  webcrack,
+  unpackChunks,
+  renameWithLLM,
+  extractReport,
+  moduleGraph,
+  callGraph,
+  toDot,
+  fingerprint,
+  matchModules,
+  detectInterpreters,
+  labelHandlers,
+  disassemble,
+  formatDisassembly,
+  liftDisassembly,
+} from 'webcrack';
+```
+
+- `unpackChunks` merges several chunk files (runtime/entry plus jsonp,
+  Turbopack or Rollup/Vite chunks) into a single bundle.
+- `renameWithLLM` renames short/mangled bindings using a caller-provided
+  `suggestNames` callback (no network access inside webcrack itself).
+- `extractReport`, `moduleGraph`, `callGraph`, `toDot` return the same report
+  and graphs as the `report`/`graph` options, for use without `webcrack()`.
+- `fingerprint` / `matchModules` identify known open-source library modules
+  (used by the `libraryMappings` option).
+- `detectInterpreters` / `labelHandlers` analyze VM-based obfuscation.
+- `disassemble` / `formatDisassembly` disassemble VM-interpreter bytecode,
+  and `liftDisassembly` (experimental) lifts a disassembly back to
+  JavaScript code.
+- Each function has matching TypeScript types (e.g. `Report`,
+  `Graph`/`GraphNode`/`GraphEdge`, `LibraryMatch`, `InterpreterInfo`,
+  `HandlerLabel`, `RenameLLMOptions`).
+
 ## Options
 
 The default options are:
@@ -75,6 +147,12 @@ await webcrack(code, {
   unminify: true, // Unminify the code
   deobfuscate: true, // Deobfuscate the code
   mangle: false, // Mangle variable names
+  renameHeuristics: false, // Rename short names using heuristics
+  report: false, // Collect URLs, endpoints, secrets, ... (see below)
+  graph: false, // Build module and call graphs (see below)
+  sourceMap: false, // Emit a source map as `result.map`
+  trace: false, // Record a per-stage transform trace as `result.trace`
+  libraryMappings: false, // Name known library modules as `node_modules/<path>`
   plugins: {}, // Explained below
   sandbox, // Explained below
 });

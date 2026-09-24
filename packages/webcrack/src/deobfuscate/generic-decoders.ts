@@ -10,6 +10,38 @@ import type { Sandbox } from './vm';
 // output and they are usually bulk data rather than decoded strings.
 const MAX_RESULT_LENGTH = 10_000;
 
+// Upper bound on the total time spent evaluating candidates in one pass.
+// Each candidate is a separate sandbox call, so this keeps N slow
+// candidates from costing N full sandbox timeouts.
+const PASS_BUDGET_MS = 30_000;
+
+function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /timed out|timeout|exceeded time/i.test(error.message)
+  );
+}
+
+// Builtin globals whose *value* must not escape into a local: aliasing one
+// (`const O = Object`, `const M = Math`) bypasses the member allowlist and
+// the `Math.random` check below, because uses through the alias look like
+// ordinary locals. These names are therefore only allowed as the `object`
+// of a member expression (validated by `checkMemberAccess`) or as the
+// callee of a call/new (`String(x)`, `Array(n)`); any other use of the
+// bare global (initializer, argument, return value, assignment RHS, ...)
+// disqualifies the function.
+const BUILTIN_VALUES = new Set([
+  'Math',
+  'Object',
+  'Array',
+  'String',
+  'Number',
+  'Boolean',
+  'RegExp',
+  'BigInt',
+  'JSON',
+]);
+
 // Globals that a pure decoder may reference. Everything else (console,
 // process, Date, ...) makes a function ineligible. Note `Math` is allowlisted
 // but `Math.random` is rejected separately below.
@@ -39,6 +71,43 @@ const PURE_GLOBALS = new Set([
   'isNaN',
   'isFinite',
 ]);
+
+// Static members of builtin constructors that are deterministic and free of
+// observable shared state. Member access on these globals is only allowed
+// for the members listed here: `Object.keys` observes prototype pollution,
+// `JSON.stringify(Array.prototype)` observes `Array.prototype` mutation, and
+// `Object.defineProperty(Object.prototype, ...)` mutates shared state, so
+// `.prototype` and every other non-allowlisted member (computed or not)
+// disqualifies the function.
+const PURE_STATIC_MEMBERS: ReadonlyMap<string, ReadonlySet<string>> = new Map<
+  string,
+  ReadonlySet<string>
+>(
+  (
+    [
+      ['String', ['fromCharCode', 'fromCodePoint']],
+      [
+        'Number',
+        [
+          'parseInt',
+          'parseFloat',
+          'isFinite',
+          'isInteger',
+          'isNaN',
+          'isSafeInteger',
+        ],
+      ],
+      ['Array', ['isArray', 'from', 'of']],
+      ['JSON', ['parse']],
+      ['BigInt', ['asIntN', 'asUintN']],
+      // Object, Boolean and RegExp expose no static member that is free of
+      // shared-state reads/writes, so any member access disqualifies.
+      ['Object', []],
+      ['Boolean', []],
+      ['RegExp', []],
+    ] as [string, string[]][]
+  ).map(([name, members]) => [name, new Set(members)]),
+);
 
 type FunctionPath = NodePath<
   t.FunctionDeclaration | t.FunctionExpression | t.ArrowFunctionExpression
@@ -101,6 +170,30 @@ function isLiteralArg(node: t.Node): boolean {
   );
 }
 
+/**
+ * Whether a bare reference to one of the `BUILTIN_VALUES` globals is in a
+ * position that `checkMemberAccess` (for member objects) or a direct call
+ * validates. Anything else lets the builtin value escape into a local,
+ * argument, or return value, so it disqualifies the function.
+ */
+function isAllowedBuiltinUse(
+  path: NodePath<t.Identifier | t.JSXIdentifier>,
+): boolean {
+  const parent = path.parentPath;
+  if (!parent) return false;
+  if (parent.isMemberExpression() || parent.isOptionalMemberExpression()) {
+    return (parent.node as t.MemberExpression).object === path.node;
+  }
+  if (
+    parent.isCallExpression() ||
+    parent.isOptionalCallExpression() ||
+    parent.isNewExpression()
+  ) {
+    return (parent.node as t.CallExpression).callee === path.node;
+  }
+  return false;
+}
+
 function isPrimitiveResult(value: unknown): boolean {
   return (
     value === null ||
@@ -128,6 +221,51 @@ function analyzePurity(
   const helpers = new Set<string>();
   let pure = true;
 
+  function checkMemberAccess(
+    object: NodePath,
+    property: NodePath,
+    computed: boolean,
+  ): void {
+    if (!object.isIdentifier()) return;
+    const name = object.node.name;
+    // A shadowed name refers to a local, not the builtin.
+    if (object.scope.getBinding(name)) return;
+    if (name === 'Math') {
+      // `Math.random()` is non-deterministic, unlike the rest of `Math`.
+      // Computed access (`Math[expr]`) may resolve to `random` at runtime
+      // (`Math[atob("cmFuZG9t")]`, `Math['ran' + 'dom']`), so every
+      // computed access on the global `Math` is rejected.
+      if (
+        computed ||
+        (property.isIdentifier() && property.node.name === 'random') ||
+        (property.isStringLiteral() && property.node.value === 'random')
+      ) {
+        pure = false;
+      }
+      return;
+    }
+    const allowed = PURE_STATIC_MEMBERS.get(name);
+    if (!allowed) {
+      // Any other pure global used as a bare function (atob, parseInt,
+      // ...) is fine, but reading its properties may observe state shared
+      // with the outer page (e.g. a polluted `atob.foo`).
+      if (PURE_GLOBALS.has(name)) pure = false;
+      return;
+    }
+    // Computed access (`Object[expr]`) may resolve to any member at
+    // runtime, so only direct `.member` access is allowed.
+    if (computed) {
+      pure = false;
+      return;
+    }
+    const key = property.isIdentifier()
+      ? property.node.name
+      : property.isStringLiteral()
+        ? property.node.value
+        : null;
+    if (key === null || !allowed.has(key)) pure = false;
+  }
+
   fnPath.traverse({
     ReferencedIdentifier(path) {
       if (!pure) return;
@@ -137,6 +275,8 @@ function analyzePurity(
       const binding = path.scope.getBinding(name);
       if (!binding) {
         if (!PURE_GLOBALS.has(name)) pure = false;
+        else if (BUILTIN_VALUES.has(name) && !isAllowedBuiltinUse(path))
+          pure = false;
         return;
       }
       if (isLocalBinding(binding, fnScope)) return;
@@ -180,21 +320,19 @@ function analyzePurity(
     },
     MemberExpression(path) {
       if (!pure) return;
-      // `Math.random()` is non-deterministic, unlike the rest of `Math`.
-      // Computed access (`Math[expr]`) may resolve to `random` at runtime
-      // (`Math[atob("cmFuZG9t")]`, `Math['ran' + 'dom']`), so every
-      // computed access on the global `Math` is rejected.
-      const object = path.get('object');
-      if (!object.isIdentifier({ name: 'Math' })) return;
-      if (object.scope.getBinding('Math')) return;
-      const property = path.get('property');
-      if (
-        path.node.computed ||
-        (property.isIdentifier() && property.node.name === 'random') ||
-        (property.isStringLiteral() && property.node.value === 'random')
-      ) {
-        pure = false;
-      }
+      checkMemberAccess(
+        path.get('object'),
+        path.get('property'),
+        path.node.computed,
+      );
+    },
+    OptionalMemberExpression(path) {
+      if (!pure) return;
+      checkMemberAccess(
+        path.get('object'),
+        path.get('property'),
+        path.node.computed,
+      );
     },
     'ThisExpression|Super|YieldExpression|AwaitExpression|Import|JSXElement|JSXFragment'() {
       pure = false;
@@ -332,8 +470,14 @@ export default {
       );
     };
 
+    // Each candidate costs a separate sandbox call, so without a bound N
+    // non-terminating candidates would cost N sandbox timeouts. Stop the
+    // whole pass after the first timeout and cap the total time spent here.
+    const passStart = Date.now();
+
     const removed = new Set<string>();
     for (const candidate of candidates.values()) {
+      if (Date.now() - passStart > PASS_BUDGET_MS) break;
       if (!candidate.pure || candidate.refs.length < 2) continue;
       // Every use must be a direct call with only literal arguments;
       // anything else (aliases, non-literal args) leaves the function alone.
@@ -352,7 +496,10 @@ export default {
         const value: unknown = await sandbox(code);
         if (!Array.isArray(value) || value.length !== calls.length) continue;
         results = value;
-      } catch {
+      } catch (error) {
+        // A timed-out candidate means the sandbox is exhausted; further
+        // candidates would each burn another full timeout, so stop the pass.
+        if (isTimeoutError(error)) break;
         continue;
       }
 
@@ -362,7 +509,11 @@ export default {
         if (!isPrimitiveResult(value)) continue;
         if (typeof value === 'string' && value.length > MAX_RESULT_LENGTH)
           continue;
-        calls[i].replaceWith(t.valueToNode(value));
+        calls[i].replaceWith(
+          value === undefined
+            ? t.unaryExpression('void', t.numericLiteral(0))
+            : t.valueToNode(value),
+        );
         replaced++;
       }
       state.changes += replaced;

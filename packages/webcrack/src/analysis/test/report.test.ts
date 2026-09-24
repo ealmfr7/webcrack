@@ -57,19 +57,49 @@ describe('endpoints', () => {
       navigator.sendBeacon("https://api.example.com/events", data);
     `);
     expect(report.endpoints).toEqual([
-      { method: 'GET', url: 'https://api.example.com/users', line: 2, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/users', line: 3, column: 6 },
-      { method: 'GET', url: 'https://api.example.com/items', line: 4, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/items', line: 5, column: 6 },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/users',
+        line: 2,
+        column: 6,
+      },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/users',
+        line: 3,
+        column: 6,
+      },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/items',
+        line: 4,
+        column: 6,
+      },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/items',
+        line: 5,
+        column: 6,
+      },
       {
         method: 'DELETE',
         url: 'https://api.example.com/items/1',
         line: 6,
         column: 6,
       },
-      { method: 'GET', url: 'https://api.example.com/poll', line: 8, column: 6 },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/poll',
+        line: 8,
+        column: 6,
+      },
       { method: 'POST', url: '/api/legacy', line: 9, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/events', line: 10, column: 6 },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/events',
+        line: 10,
+        column: 6,
+      },
     ]);
   });
 
@@ -103,6 +133,43 @@ describe('endpoints', () => {
     const report = reportOf(`window.open("https://example.com/x", "_blank");`);
     expect(report.endpoints).toEqual([]);
   });
+
+  test('only global fetch receivers are endpoints', () => {
+    const report = reportOf(`
+      db.fetch("users");
+      window.fetch("https://w.example/x");
+      globalThis.fetch("https://g.example/x");
+      self.fetch("https://s.example/x");
+      fetch("https://bare.example/x");
+      fetch?.("https://optional.example/x");
+    `);
+    expect(report.endpoints.map((e) => e.url)).toEqual([
+      'https://w.example/x',
+      'https://g.example/x',
+      'https://s.example/x',
+      'https://bare.example/x',
+      'https://optional.example/x',
+    ]);
+  });
+
+  test('shadowed fetch and window are not endpoints', () => {
+    const report = reportOf(`
+      function fetch(u) { return u; }
+      fetch("https://a.example/x");
+    `);
+    expect(report.endpoints).toEqual([]);
+
+    const shadowedWindow = reportOf(`
+      const window = { fetch(u) { return u; } };
+      window.fetch("https://a.example/x");
+    `);
+    expect(shadowedWindow.endpoints).toEqual([]);
+
+    const shadowedParam = reportOf(`
+      function f(fetch) { return fetch("https://a.example/x"); }
+    `);
+    expect(shadowedParam.endpoints).toEqual([]);
+  });
 });
 
 describe('secrets', () => {
@@ -114,7 +181,12 @@ describe('secrets', () => {
       const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     `);
     expect(report.secrets).toEqual([
-      { value: 'AKIAIOSFODNN7EXAMPLE', rule: 'aws-access-key', line: 2, column: 18 },
+      {
+        value: 'AKIAIOSFODNN7EXAMPLE',
+        rule: 'aws-access-key',
+        line: 2,
+        column: 18,
+      },
       {
         value: 'AIzaSyA-abcdefghijklmnopqrstuvwxy123456',
         rule: 'google-api-key',
@@ -140,7 +212,12 @@ describe('secrets', () => {
   test('generic high-entropy strings', () => {
     const report = reportOf(`const token = "xK9#mQ2$vL7@nP4!wR8zT5yU";`);
     expect(report.secrets).toEqual([
-      { value: 'xK9#mQ2$vL7@nP4!wR8zT5yU', rule: 'generic-high-entropy', line: 1, column: 14 },
+      {
+        value: 'xK9#mQ2$vL7@nP4!wR8zT5yU',
+        rule: 'generic-high-entropy',
+        line: 1,
+        column: 14,
+      },
     ]);
   });
 
@@ -172,6 +249,14 @@ describe('regexes', () => {
       '/static-source/',
     ]);
   });
+
+  test('optional RegExp call form', () => {
+    const report = reportOf(`
+      const a = RegExp?.("a+b");
+      const b = RegExp?.("c+d", "gi");
+    `);
+    expect(report.regexes.map((r) => r.value)).toEqual(['/a+b/', '/c+d/gi']);
+  });
 });
 
 describe('interesting', () => {
@@ -190,12 +275,10 @@ describe('interesting', () => {
       { value: '/api/v1/users', kind: 'path', line: 5, column: 19 },
       { value: '/api/v2/items', kind: 'path', line: 6, column: 19 },
     ]);
-    expect(
-      report.interesting.some((e) => e.value.includes('999')),
-    ).toBe(false);
-    expect(
-      report.interesting.some((e) => e.value.includes('12:34')),
-    ).toBe(false);
+    expect(report.interesting.some((e) => e.value.includes('999'))).toBe(false);
+    expect(report.interesting.some((e) => e.value.includes('12:34'))).toBe(
+      false,
+    );
   });
 });
 

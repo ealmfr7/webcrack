@@ -65,6 +65,22 @@ function expectValidDot(dot: string): void {
   }
   expect(inString).toBe(false);
   expect(depth).toBe(0);
+  // Reject unquoted DOT keywords used as IDs: `graph`, `digraph`, `node`,
+  // `edge`, `subgraph` and `strict` are reserved and must always be quoted.
+  // Strip quoted strings (handling escapes), drop the leading `digraph`
+  // keyword, then no bare keyword may remain.
+  const stripped = dot.replace(/"(?:[^"\\\r\n]|\\.)*"/g, '""');
+  const withoutHeader = stripped.replace(/^\s*digraph\b/, '');
+  for (const keyword of [
+    'graph',
+    'digraph',
+    'node',
+    'edge',
+    'subgraph',
+    'strict',
+  ]) {
+    expect(withoutHeader).not.toMatch(new RegExp(`\\b${keyword}\\b`));
+  }
 }
 
 describe('moduleGraph', () => {
@@ -322,5 +338,52 @@ describe('serializers', () => {
   test('toDot of a real module graph is valid DOT', async () => {
     const bundle = await unpackCorpus('browserify.js');
     expectValidDot(toDot(moduleGraph(bundle)));
+  });
+
+  test('toDot always quotes the graph name (default is a DOT keyword)', () => {
+    const dot = toDot(graph);
+    expect(dot.startsWith('digraph "graph" {')).toBe(true);
+    expectValidDot(dot);
+  });
+
+  test('toDot quotes keyword and quote-containing names', () => {
+    for (const name of [
+      'node',
+      'edge',
+      'digraph',
+      'subgraph',
+      'strict',
+      'my "quoted"\nname',
+    ]) {
+      const dot = toDot(graph, name);
+      expect(dot.startsWith('digraph "')).toBe(true);
+      expectValidDot(dot);
+    }
+  });
+
+  test('expectValidDot rejects unquoted DOT keywords', () => {
+    expect(() => expectValidDot('digraph graph {\n}\n')).toThrow();
+    expect(() => expectValidDot('digraph "ok" {\n  node;\n}\n')).toThrow();
+    expect(() => expectValidDot('digraph "ok" {\n}\n')).not.toThrow();
+  });
+
+  test('moduleGraph resolves a large synthetic bundle', () => {
+    const count = 300;
+    const files: [id: string, code: string, isEntry?: boolean][] = [];
+    for (let i = 0; i < count; i++) {
+      const next =
+        i + 1 < count ? `require("./mod${i + 1}.js");` : `module.exports = 1;`;
+      files.push([`${i}`, next, i === 0]);
+    }
+    const bundle = testBundle('webpack', '0', files);
+    for (let i = 0; i < count; i++) {
+      bundle.modules.get(`${i}`)!.path = `./mod${i}.js`;
+    }
+    const graph = moduleGraph(bundle);
+    // Every chained require resolves inside the bundle: no external nodes
+    // and one edge per module except the last.
+    expect(graph.nodes.some((n) => n.external)).toBe(false);
+    expect(graph.edges).toHaveLength(count - 1);
+    expectValidDot(toDot(graph));
   });
 });

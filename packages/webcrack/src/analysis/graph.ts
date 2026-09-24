@@ -99,14 +99,12 @@ function collectDepSpecifiers(ast: t.File): string[] {
  * Resolve a dependency specifier to a module id in the bundle.
  * Returns `undefined` for unresolved (external) dependencies.
  */
-function resolveSpecifier(
-  spec: string,
-  fromPath: string,
-  bundle: Bundle,
-): string | undefined {
-  // Exact module id (webpack numeric ids, esbuild path-like ids)
-  if (bundle.modules.has(spec)) return spec;
+interface ModuleLookup {
+  byPath: Map<string, string>;
+  byNormalized: Map<string, string>;
+}
 
+function buildModuleLookup(bundle: Bundle): ModuleLookup {
   const byPath = new Map<string, string>();
   const byNormalized = new Map<string, string>();
   for (const mod of bundle.modules.values()) {
@@ -114,6 +112,19 @@ function resolveSpecifier(
     const normalized = stripDotSlash(mod.path);
     if (!byNormalized.has(normalized)) byNormalized.set(normalized, mod.id);
   }
+  return { byPath, byNormalized };
+}
+
+function resolveSpecifier(
+  spec: string,
+  fromPath: string,
+  bundle: Bundle,
+  lookup: ModuleLookup,
+): string | undefined {
+  // Exact module id (webpack numeric ids, esbuild path-like ids)
+  if (bundle.modules.has(spec)) return spec;
+
+  const { byPath, byNormalized } = lookup;
 
   if (byPath.has(spec)) return byPath.get(spec);
   if (byNormalized.has(stripDotSlash(spec))) {
@@ -175,9 +186,12 @@ export function moduleGraph(bundle: Bundle): Graph {
   const modules = [...bundle.modules.values()].sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
+  // Build the path lookup maps once; resolveSpecifier must not rebuild them
+  // per lookup (previously O(modules x specifiers)).
+  const lookup = buildModuleLookup(bundle);
   for (const mod of modules) {
     for (const spec of collectDepSpecifiers(mod.ast)) {
-      const target = resolveSpecifier(spec, mod.path, bundle);
+      const target = resolveSpecifier(spec, mod.path, bundle, lookup);
       const to = target ?? `external:${spec}`;
       if (target === undefined && !nodes.has(to)) {
         nodes.set(to, { id: to, label: spec, external: true });
@@ -646,7 +660,9 @@ function escapeDotLabel(label: string): string {
  * produce valid DOT.
  */
 export function toDot(graph: Graph, name = 'graph'): string {
-  const lines = [`digraph ${name} {`];
+  // `graph` (the default) is a reserved DOT keyword, so the name is always
+  // quoted — an unquoted `digraph graph {` is rejected by Graphviz.
+  const lines = [`digraph "${escapeDotLabel(name)}" {`];
   for (const node of sortedNodes(graph.nodes)) {
     const label = escapeDotLabel(node.label ?? node.id);
     const attrs = [`label="${label}"`];

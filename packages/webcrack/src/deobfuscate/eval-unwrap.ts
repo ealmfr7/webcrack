@@ -112,6 +112,27 @@ function asFunctionConstruction(
   return { args: node.arguments };
 }
 
+// Nodes re-parsed from a decoded string carry `loc` relative to that
+// string. With Options.sourceMap (keepLoc) those positions would map the
+// output to made-up input locations, so strip them and point the spliced
+// top-level statements (or the replacement expression) at the node they
+// replace instead.
+function stripLoc(node: t.Node): void {
+  node.loc = undefined;
+  const keys = t.VISITOR_KEYS[node.type];
+  if (!keys) return;
+  for (const key of keys) {
+    const value: unknown = (node as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (t.isNode(child)) stripLoc(child);
+      }
+    } else if (t.isNode(value)) {
+      stripLoc(value);
+    }
+  }
+}
+
 function parseStatements(code: string): t.Statement[] | undefined {
   try {
     const program = parse(code, {
@@ -123,6 +144,7 @@ function parseStatements(code: string): t.Statement[] | undefined {
     // only; the parser lifts it out of `body`, so splicing the rest would
     // silently drop it and could change strictness-sensitive behavior.
     if (program.directives.length > 0) return undefined;
+    for (const statement of program.body) stripLoc(statement);
     return program.body;
   } catch {
     // Unparseable payloads are left untouched.
@@ -147,7 +169,9 @@ function parseFunctionExpression(
     if (program.length !== 1 || !t.isFunctionDeclaration(declaration)) {
       return undefined;
     }
-    return t.functionExpression(null, declaration.params, declaration.body);
+    const fn = t.functionExpression(null, declaration.params, declaration.body);
+    stripLoc(fn);
+    return fn;
   } catch {
     return undefined;
   }
@@ -220,6 +244,10 @@ function spliceStatements(
 ): boolean {
   if (!Array.isArray(statement.container)) return false;
   if (hasLexicalConflict(statement.scope, statements)) return false;
+  const loc = statement.node.loc;
+  if (loc != null) {
+    for (const spliced of statements) spliced.loc = loc;
+  }
   statement.replaceWithMultiple(statements);
   return true;
 }
@@ -248,12 +276,12 @@ function inlineFunctionBody(
   // Expression (or single-statement) position: an IIFE preserves the
   // `return` behavior, the local scoping, and the call value
   // (`undefined` unless the body returns).
-  path.replaceWith(
-    t.callExpression(
-      t.functionExpression(null, [], t.blockStatement(statements)),
-      [],
-    ),
+  const replacement = t.callExpression(
+    t.functionExpression(null, [], t.blockStatement(statements)),
+    [],
   );
+  replacement.loc = path.node.loc;
+  path.replaceWith(replacement);
   state.changes++;
 }
 
@@ -273,6 +301,7 @@ function convertConstruction(
     strings.length === 0 ? '' : strings[strings.length - 1],
   );
   if (!fn) return;
+  fn.loc = path.node.loc;
   path.replaceWith(fn);
   state.changes++;
 }

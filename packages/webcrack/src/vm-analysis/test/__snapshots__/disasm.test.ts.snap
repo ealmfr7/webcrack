@@ -1,0 +1,19 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`disassemble > disassembles a typed-array bytecode with a conditional jump 1`] = `
+"0000: push-const 1
+0002: cond-jump L_0005
+0004: return
+L_0005:
+0005: db 0x3"
+`;
+
+exports[`disassemble > disassembles operands and jump labels 1`] = `
+"L_0000:
+0000: push-const 10
+0002: db 0x63
+0003: binop
+0004: jump L_0000
+0006: pop
+0007: return"
+`;

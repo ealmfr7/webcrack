@@ -75,7 +75,10 @@ describe('rollup regions', async () => {
   });
 
   test('works through visitors.merge', async () => {
-    const code = await readFile(join(FIXTURES_DIR, 'rollup-regions.js'), 'utf8');
+    const code = await readFile(
+      join(FIXTURES_DIR, 'rollup-regions.js'),
+      'utf8',
+    );
     const merged = unpack(code, true);
     expect(merged?.modules.size).toBe(3);
     expect(merged?.entryId).toBe('./src/main.js');
