@@ -358,7 +358,7 @@ pisarse:
 
 ### Fase 3: flujo completo y funciones avanzadas
 
-- [ ] **M3.1** `wc_export` (código con renames, `report.json`, `notes.md`,
+- [x] **M3.1** `wc_export` (código con renames, `report.json`, `notes.md`,
       grafos `.dot`).
 - [ ] **M3.2** Prompt MCP `audit`: guía el flujo abrir → map → findings →
       investigar (goto/refs/read/annotate) → informe final.
