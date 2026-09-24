@@ -1,11 +1,16 @@
 import { parse } from '@babel/parser';
-import traverse, { type Binding, type NodePath } from '@babel/traverse';
+import traverse, {
+  type Binding,
+  type NodePath,
+  type Visitor,
+} from '@babel/traverse';
 import type { File, Node } from '@babel/types';
 import { z } from 'zod';
 import { suggest, WcError } from '../format/errors';
 import { textResult } from '../format/response';
 import { parseTarget, resolveModule, resolveSymbol } from '../format/target';
 import type { ModuleEntry, SymbolEntry, Workspace } from '../workspace/types';
+import { approximateSymbolMatches } from '../workspace/approximate';
 import { defineTool, readOnly, workspaceArg } from './define';
 
 export const trace = defineTool({
@@ -55,6 +60,8 @@ type Role =
   | 'seed'
   | 'init'
   | 'assign'
+  /** A write matched by property name only (object identity unknown). */
+  | 'assign~'
   | 'param'
   | 'arg'
   | 'call'
@@ -83,6 +90,8 @@ interface Seed {
   /** Identifier name when the seed is a binding; undefined for literals. */
   name?: string;
   literal?: string;
+  /** An argument expression selected from a sink call on a requested line. */
+  expression?: Node;
 }
 
 /** Re-parsed module ASTs, keyed by module entry. Re-parse on code change. */
@@ -105,6 +114,27 @@ function getAst(entry: ModuleEntry): File | undefined {
   }
   astCache.set(entry, { code: entry.code, ast });
   return ast;
+}
+
+/**
+ * `traverse`, but only into nodes whose lines overlap `start`-`end`: every
+ * lookup here is for one line or one function, and a full walk of a
+ * 160k-line bundle per trace step made traces take minutes. Nodes without
+ * a location are kept (they cannot be ruled out).
+ */
+function traverseLines(
+  ast: File,
+  start: number,
+  end: number,
+  visitor: Visitor,
+): void {
+  const prune: Visitor = {
+    enter(path) {
+      const loc = path.node.loc;
+      if (loc && (loc.end.line < start || loc.start.line > end)) path.skip();
+    },
+  };
+  traverse(ast, traverse.visitors.merge([prune, visitor]));
 }
 
 /** Trimmed 1-based source line of a module, if present. */
@@ -179,19 +209,18 @@ function patternNames(node: Node, out: string[]): void {
 function scopeAtLine(ast: File, line: number): NodePath | undefined {
   let best: NodePath | undefined;
   let bestDepth = -1;
-  traverse(ast, {
+  traverseLines(ast, line, line, {
     enter(path) {
-      if (!path.isFunction() && !path.isProgram()) return;
       const loc = path.node.loc;
       if (loc === null || loc === undefined) return;
       if (loc.start.line <= line && line <= loc.end.line) {
         let depth = 0;
         let parent = path.parentPath;
         while (parent !== null) {
-          if (parent.isFunction()) depth++;
+          depth++;
           parent = parent.parentPath;
         }
-        if (depth >= bestDepth) {
+        if (depth > bestDepth) {
           bestDepth = depth;
           best = path;
         }
@@ -346,7 +375,7 @@ function seedPath(
   const ast = getAst(entry);
   if (ast === undefined) return undefined;
   let found: NodePath | undefined;
-  traverse(ast, {
+  traverseLines(ast, seed.line, seed.line, {
     enter(path) {
       if (found !== undefined) {
         path.skip();
@@ -358,6 +387,8 @@ function seedPath(
       }
       if (seed.name !== undefined) {
         if (path.isIdentifier({ name: seed.name })) found = path;
+      } else if (seed.expression !== undefined) {
+        if (path.node === seed.expression) found = path;
       } else if (path.isStringLiteral({ value: seed.literal ?? '' })) {
         found = path;
       }
@@ -374,12 +405,17 @@ class Tracer {
   private readonly seenSteps = new Set<string>();
   private readonly sinks: Sink[] = [];
   private readonly visited = new Set<string>();
+  private readonly propertyNotes: string[] = [];
+  private readonly propertyNoted = new Set<string>();
+  private stepLimit: number;
+  private approximate = false;
   private capped = false;
 
   constructor(ws: Workspace, depth: number, maxSteps: number) {
     this.ws = ws;
     this.maxDepth = depth;
     this.maxSteps = maxSteps;
+    this.stepLimit = maxSteps;
   }
 
   run(value: string, direction: Direction): string {
@@ -387,9 +423,30 @@ class Tracer {
     const lines = [
       `Trace ${JSON.stringify(value)} (${direction}, depth ${this.maxDepth}, maxSteps ${this.maxSteps}): ${seeds.length} seed${seeds.length === 1 ? '' : 's'}.`,
     ];
+    if (this.approximate) {
+      lines.push(
+        'Approximate text matches: these locations are not resolved bindings.',
+      );
+    }
     if (direction === 'backward' || direction === 'both') {
       const start = this.steps.length;
-      for (const seed of seeds) this.backwardFromSeed(seed);
+      for (let i = 0; i < seeds.length; i++) {
+        const seed = seeds[i];
+        if (seed === undefined) continue;
+        if (seed.expression !== undefined && seeds.length > 1) {
+          const remaining = seeds.length - i;
+          const allowance = Math.max(
+            1,
+            Math.floor((this.maxSteps - this.steps.length) / remaining),
+          );
+          this.stepLimit = Math.min(
+            this.maxSteps,
+            this.steps.length + allowance,
+          );
+        }
+        this.backwardFromSeed(seed, i);
+      }
+      this.stepLimit = this.maxSteps;
       lines.push(
         '',
         ...this.renderSection('Backward (how it is built)', start),
@@ -401,6 +458,9 @@ class Tracer {
       lines.push('', ...this.renderSection('Forward (where it flows)', start));
     }
     lines.push('', ...this.renderSinks());
+    if (this.propertyNotes.length > 0) {
+      lines.push('', ...this.propertyNotes);
+    }
     if (this.capped) {
       lines.push(
         `… stopped early: step cap (maxSteps ${this.maxSteps}) or depth cap (depth ${this.maxDepth}) reached. Re-run with larger caps to see more.`,
@@ -437,6 +497,19 @@ class Tracer {
     if (exactHits.length > 0) {
       return exactHits.map(toSeed);
     }
+    // Tool callers sometimes pass the JSON spelling displayed in a hint.
+    // Decode it once so escaped quotes match the literal's actual value.
+    if (value.startsWith('"') && value.endsWith('"')) {
+      try {
+        const decoded: unknown = JSON.parse(value);
+        if (typeof decoded === 'string') {
+          const hits = this.ws.index.strings.filter((s) => s.value === decoded);
+          if (hits.length > 0) return hits.map(toSeed);
+        }
+      } catch {
+        // Keep the original value for normal lookup and suggestions.
+      }
+    }
     const input = value.trim();
     if (input !== value) {
       const trimmedHits = this.ws.index.strings.filter(
@@ -469,6 +542,23 @@ class Tracer {
           `No identifiers or string literals on ${entry.path}:${start}${end === start ? '' : `-${end}`}. Call wc_read ${entry.path}:${start} to see the code.`,
         );
       }
+      const approximate =
+        symbolError instanceof WcError &&
+        symbolError.message.startsWith('Unknown symbol')
+          ? approximateSymbolMatches(this.ws, input, 3)
+          : [];
+      if (approximate.length > 0) {
+        this.approximate = true;
+        const name = input
+          .slice(input.lastIndexOf(':') + 1)
+          .split('.')
+          .at(-1);
+        return approximate.map((m) => ({
+          module: m.module,
+          line: m.line,
+          name,
+        }));
+      }
       if (
         symbolError instanceof WcError &&
         symbolError.suggestions.length > 0
@@ -484,6 +574,9 @@ class Tracer {
           ...this.ws.index.symbols.map((s) => `${s.module}:${s.name}`),
           ...this.ws.index.strings.map((s) => s.value),
         ]),
+      ).filter(
+        (candidate) =>
+          candidate !== value && JSON.stringify(candidate) !== value,
       );
       throw new WcError(
         `Unknown value ${JSON.stringify(value)}: no matching string literal, symbol or module:line.${candidates.length > 0 ? ` Did you mean ${candidates.map((c) => `\`${JSON.stringify(c)}\``).join(', ')}?` : ''} Call wc_search to find similar code.`,
@@ -498,7 +591,20 @@ class Tracer {
     const seen = new Set<string>();
     const ast = getAst(entry);
     if (ast === undefined) return seeds;
-    traverse(ast, {
+    traverseLines(ast, line, line, {
+      CallExpression(path) {
+        if (path.node.loc?.start.line !== line) return;
+        const callee = calleeText(path.node.callee);
+        if (sinkLabelForName(callee) === undefined) return;
+        for (const argument of path.node.arguments) {
+          if (argument.type !== 'ArgumentPlaceholder') {
+            seeds.push({ module: entry.path, line, expression: argument });
+          }
+        }
+      },
+    });
+    if (seeds.length > 0) return seeds;
+    traverseLines(ast, line, line, {
       Identifier(path) {
         if (path.node.loc?.start.line !== line) return;
         const parent = path.parentPath?.node;
@@ -535,7 +641,7 @@ class Tracer {
 
   /** Append a step unless a cap stops the trace. */
   private push(step: Step): boolean {
-    if (this.steps.length >= this.maxSteps) {
+    if (this.steps.length >= this.stepLimit) {
       this.capped = true;
       return false;
     }
@@ -558,6 +664,10 @@ class Tracer {
 
   /** Guard against unbounded recursion: one visit per key. */
   private claim(key: string): boolean {
+    if (this.steps.length >= this.stepLimit) {
+      this.capped = true;
+      return false;
+    }
     if (this.visited.has(key)) return false;
     this.visited.add(key);
     return true;
@@ -590,8 +700,8 @@ class Tracer {
 
   // -- Backward ---------------------------------------------------------------
 
-  private backwardFromSeed(seed: Seed): void {
-    const key = `bseed:${seed.module}:${seed.line}:${seed.name ?? `=${seed.literal ?? ''}`}`;
+  private backwardFromSeed(seed: Seed, index: number): void {
+    const key = `bseed:${seed.module}:${seed.line}:${index}:${seed.name ?? seed.expression?.loc?.start.column ?? `=${seed.literal ?? ''}`}`;
     if (!this.claim(key)) return;
     if (
       !this.push({
@@ -603,7 +713,10 @@ class Tracer {
     ) {
       return;
     }
-    if (seed.name !== undefined) {
+    this.recordSinkOnLine(seed.module, seed.line);
+    if (seed.expression !== undefined) {
+      this.backwardFromNode(seed.module, seed.expression, 0);
+    } else if (seed.name !== undefined) {
       this.backwardFromIdentifier(seed.module, seed.name, seed.line);
     } else {
       // A literal is atomic: show how its enclosing statement is built by
@@ -746,13 +859,23 @@ class Tracer {
     for (const param of fnPath.node.params) patternNames(param, names);
     const paramName = binding.identifier.name;
     const paramIndex = names.indexOf(paramName);
+    if (
+      this.backwardCallbackParamToInvocations(module, fnPath, paramIndex, depth)
+    )
+      return;
     const fnLine = nodeLine(fnPath.node, 1);
     const caller = findEnclosingSymbol(this.ws, module, fnLine);
+    // A nested callback is not the enclosing function's own parameter.
+    if (caller?.line !== fnLine) return;
     if (caller === undefined || depth + 1 > this.maxDepth) {
       if (caller !== undefined) this.capped = true;
       return;
     }
     for (const site of callSitesOf(this.ws, caller)) {
+      if (this.steps.length >= this.stepLimit) {
+        this.capped = true;
+        return;
+      }
       const args = callArguments(this.ws, site.module, site.line, caller.name);
       const arg = paramIndex === -1 ? undefined : args[paramIndex];
       this.push({
@@ -765,13 +888,71 @@ class Tracer {
     }
   }
 
+  /** A direct callback argument receives values at calls of that parameter. */
+  private backwardCallbackParamToInvocations(
+    module: string,
+    fnPath: NodePath,
+    paramIndex: number,
+    depth: number,
+  ): boolean {
+    const parent = fnPath.parentPath;
+    if (parent === null || !parent.isCallExpression()) return false;
+    const callbackIndex = parent.node.arguments.findIndex(
+      (arg) => arg === fnPath.node,
+    );
+    if (callbackIndex < 0) return false;
+    const callee = calleeText(parent.node.callee);
+    const target = resolveCallTarget(
+      this.ws,
+      callee,
+      module,
+      nodeLine(parent.node, 1),
+    );
+    if (target === undefined) return true;
+    const callbackName = target.params?.[callbackIndex];
+    if (callbackName === undefined || paramIndex < 0) return true;
+    if (depth + 1 > this.maxDepth) {
+      this.capped = true;
+      return true;
+    }
+    const entry = this.ws.modules.get(target.module);
+    if (entry === undefined) return true;
+    const ast = getAst(entry);
+    if (ast === undefined) return true;
+    let followed = 0;
+    traverseLines(ast, target.line, target.endLine, {
+      CallExpression: (path) => {
+        if (this.steps.length >= this.stepLimit) {
+          this.capped = true;
+          path.stop();
+          return;
+        }
+        if (followed >= 8 || path.node.callee.type !== 'Identifier') return;
+        if (path.node.callee.name !== callbackName) return;
+        const bound = path.scope.getBinding(callbackName);
+        if (
+          bound?.kind !== 'param' ||
+          nodeLine(bound.scope.path.node, 0) !== target.line
+        )
+          return;
+        const arg = path.node.arguments[paramIndex];
+        if (arg === undefined || arg.type === 'ArgumentPlaceholder') return;
+        followed++;
+        const line = nodeLine(path.node, target.line);
+        this.push({ module: target.module, line, role: 'arg', code: '' });
+        this.backwardFromNode(target.module, arg, depth + 1);
+      },
+    });
+    return true;
+  }
+
   /**
    * Follow the expression that builds a value: initializers, string
    * concatenation, template literals, object properties, calls.
    */
   private backwardFromNode(module: string, node: Node, depth: number): void {
     const line = nodeLine(node, 1);
-    const key = `bexpr:${module}:${line}:${node.type}`;
+    const key = `bexpr:${module}:${line}:${node.loc?.start.column ?? -1}:${node.loc?.end.line ?? line}:${node.loc?.end.column ?? -1}:${node.type}`;
     if (!this.claim(key)) return;
     switch (node.type) {
       case 'Identifier':
@@ -837,10 +1018,20 @@ class Tracer {
         this.backwardFromNode(module, node.expression, depth);
         return;
       case 'MemberExpression':
-      case 'OptionalMemberExpression':
+      case 'OptionalMemberExpression': {
+        const property =
+          !node.computed && node.property.type === 'Identifier'
+            ? node.property.name
+            : node.property.type === 'StringLiteral'
+              ? node.property.value
+              : undefined;
+        if (property !== undefined) {
+          this.backwardFromProperty(module, property, line, depth);
+        }
         this.backwardFromNode(module, node.object, depth);
         if (node.computed) this.backwardFromNode(module, node.property, depth);
         return;
+      }
       case 'ObjectExpression':
         for (const prop of node.properties) {
           if (prop.type === 'ObjectProperty') {
@@ -874,6 +1065,74 @@ class Tracer {
     }
   }
 
+  /** Nearby writes with the same property name; object identity is unknown. */
+  private backwardFromProperty(
+    module: string,
+    property: string,
+    beforeLine: number,
+    depth: number,
+  ): void {
+    if (this.propertyNotes.length >= 3) return;
+    const key = `bproperty:${module}:${property}:${beforeLine}`;
+    if (!this.claim(key)) return;
+    if (depth + 1 > this.maxDepth) {
+      this.capped = true;
+      return;
+    }
+    const entry = this.ws.modules.get(module);
+    if (entry === undefined) return;
+    const ast = getAst(entry);
+    if (ast === undefined) return;
+    const lines = entry.code.split('\n');
+    const candidates: number[] = [];
+    for (let i = 0; i < Math.min(beforeLine - 1, lines.length); i++) {
+      const source = lines[i];
+      if (source?.includes(`.${property}`) && source.includes('=')) {
+        candidates.push(i + 1);
+      }
+    }
+    const writes: Array<{ line: number; value: Node }> = [];
+    // Search from the nearest preceding line and stop after three matches:
+    // they are guesses, and must not crowd exact steps out of the budget.
+    // The text filter avoids a full AST walk for every property read.
+    for (const candidate of candidates.reverse()) {
+      traverseLines(ast, candidate, candidate, {
+        AssignmentExpression(path) {
+          const left = path.node.left;
+          if (left.type !== 'MemberExpression') return;
+          const name =
+            !left.computed && left.property.type === 'Identifier'
+              ? left.property.name
+              : left.property.type === 'StringLiteral'
+                ? left.property.value
+                : undefined;
+          if (name === property && path.node.loc?.start.line === candidate) {
+            writes.push({ line: candidate, value: path.node.right });
+          }
+        },
+      });
+      if (writes.length >= 3) break;
+    }
+    if (writes.length === 0) return;
+    const noteKey = `${module}:${property}`;
+    if (!this.propertyNoted.has(noteKey)) {
+      this.propertyNoted.add(noteKey);
+      this.propertyNotes.push(
+        `Property .${property}: ${writes.length} nearby write${writes.length === 1 ? '' : 's'} shown as \`assign~\`. Matches are approximate (by property name, not object identity); use wc_read on a write to continue.`,
+      );
+    }
+    for (const write of writes) {
+      if (!this.push({ module, line: write.line, role: 'assign~', code: '' }))
+        return;
+    }
+    // Follow only the closest value here; the other writes remain visible
+    // without letting one common property consume the entire step budget.
+    const nearest = writes[0];
+    if (nearest !== undefined) {
+      this.backwardFromNode(module, nearest.value, depth + 1);
+    }
+  }
+
   /** A call result is built by the callee's returned expressions. */
   private backwardIntoCallee(
     module: string,
@@ -882,6 +1141,10 @@ class Tracer {
     },
     depth: number,
   ): void {
+    if (this.steps.length >= this.stepLimit) {
+      this.capped = true;
+      return;
+    }
     if (depth + 1 > this.maxDepth) {
       this.capped = true;
       return;
@@ -899,7 +1162,7 @@ class Tracer {
     const ast = getAst(entry);
     if (ast === undefined) return;
     let found = false;
-    traverse(ast, {
+    traverseLines(ast, target.line, target.endLine, {
       ReturnStatement(path) {
         if (
           target.line <= (path.node.loc?.start.line ?? 0) &&
@@ -911,7 +1174,7 @@ class Tracer {
       },
     });
     if (!found) return;
-    traverse(ast, {
+    traverseLines(ast, target.line, target.endLine, {
       ReturnStatement: (path) => {
         const loc = path.node.loc;
         if (loc === null || loc === undefined) return;
@@ -936,7 +1199,7 @@ class Tracer {
   // -- Forward ------------------------------------------------------------------
 
   private forwardFromSeed(seed: Seed, depth: number): void {
-    const key = `fseed:${seed.module}:${seed.line}:${seed.name ?? `=${seed.literal ?? ''}`}`;
+    const key = `fseed:${seed.module}:${seed.line}:${seed.name ?? seed.expression?.loc?.start.column ?? `=${seed.literal ?? ''}`}`;
     if (!this.claim(key)) return;
     if (
       !this.push({
@@ -948,12 +1211,21 @@ class Tracer {
     ) {
       return;
     }
+    this.recordSinkOnLine(seed.module, seed.line);
     if (seed.name !== undefined) {
       this.forwardFromIdentifier(seed.module, seed.name, seed.line, depth);
     } else {
       const located = seedPath(this.ws, seed);
       if (located === undefined) return;
       this.forwardFromUse(seed.module, located.path, depth);
+    }
+  }
+
+  private recordSinkOnLine(module: string, line: number): void {
+    for (const site of this.ws.index.calls) {
+      if (site.module !== module || site.line !== line) continue;
+      const label = sinkLabel(this.ws, site.callee, module, line);
+      if (label !== undefined) this.pushSink(label, module, line);
     }
   }
 
@@ -1068,7 +1340,7 @@ class Tracer {
     if (ast === undefined) return;
     const short = lastSegment(name);
     let use: NodePath | undefined;
-    traverse(ast, {
+    traverseLines(ast, line, line, {
       Identifier(path) {
         if (use !== undefined) return;
         if (path.node.name !== short) return;
@@ -1203,7 +1475,7 @@ class Tracer {
     if (ast === undefined) return;
     let call: NodePath | undefined;
     let fallback: NodePath | undefined;
-    traverse(ast, {
+    traverseLines(ast, line, line, {
       enter(path) {
         if (call !== undefined) {
           path.skip();
@@ -1406,12 +1678,32 @@ function findEnclosingSymbol(
 }
 
 /** Call sites whose callee resolves to `symbol` (index.calls + resolveSymbol). */
+const importAliasCache = new WeakMap<Workspace['index'], Set<string>>();
+
+/** Names bound by imports anywhere (they may alias a symbol's name). */
+function importAliases(ws: Workspace): Set<string> {
+  let names = importAliasCache.get(ws.index);
+  if (names === undefined) {
+    names = new Set(
+      ws.index.symbols.filter((s) => s.kind === 'import').map((s) => s.name),
+    );
+    importAliasCache.set(ws.index, names);
+  }
+  return names;
+}
+
 function callSitesOf(
   ws: Workspace,
   symbol: SymbolEntry,
 ): { module: string; line: number }[] {
   const out: { module: string; line: number }[] = [];
+  // Only a call spelled like the symbol, or through an import binding (an
+  // alias such as `import { sign as s }`), can resolve to it. Resolving the
+  // other ~50k calls of a big bundle (each unknown name builds "did you
+  // mean" suggestions) made one trace step take minutes.
+  const aliases = importAliases(ws);
   for (const call of ws.index.calls) {
+    if (call.callee !== symbol.name && !aliases.has(call.callee)) continue;
     let target: SymbolEntry | undefined;
     try {
       target = resolveSymbol(ws, call.callee, `${call.module}:${call.line}`);
@@ -1447,7 +1739,7 @@ function callArguments(
   if (ast === undefined) return [];
   let args: Node[] = [];
   let fallback: Node[] = [];
-  traverse(ast, {
+  traverseLines(ast, line, line, {
     enter(path) {
       if (args.length > 0) {
         path.skip();
@@ -1501,6 +1793,14 @@ function sinkLabel(
   module: string,
   line: number,
 ): string | undefined {
+  const callSink = sinkLabelForName(callee);
+  if (callSink !== undefined) return callSink;
+  if (/document\.cookie/.test(lineAt(ws, module, line)))
+    return 'document.cookie';
+  return undefined;
+}
+
+function sinkLabelForName(callee: string): string | undefined {
   if (callee === 'fetch') return 'fetch';
   if (callee.startsWith('axios.')) return callee;
   if (callee === 'XMLHttpRequest') return 'XMLHttpRequest';
@@ -1512,11 +1812,13 @@ function sinkLabel(
     return `XMLHttpRequest ${lastSegment(callee)}`;
   }
   if (callee === 'WebSocket') return 'WebSocket';
+  if (callee === 'EventSource') return 'EventSource';
+  if (callee === 'sendBeacon' || callee.endsWith('.sendBeacon')) {
+    return 'sendBeacon';
+  }
   if (callee === 'postMessage' || callee.endsWith('.postMessage')) {
     return 'postMessage';
   }
   if (callee.endsWith('.setItem')) return callee;
-  if (/document\.cookie/.test(lineAt(ws, module, line)))
-    return 'document.cookie';
   return undefined;
 }

@@ -4,8 +4,9 @@ import { WcError } from '../src/format/errors';
 import type { ToolContext } from '../src/tools/define';
 import { trace } from '../src/tools/trace';
 import { WorkspaceStore } from '../src/workspace/store';
+import { buildIndex } from '../src/workspace/indexer';
 import type { Workspace } from '../src/workspace/types';
-import { fixtureWorkspace } from './helpers';
+import { connect, fixtureWorkspace } from './helpers';
 
 /** Call `trace.handler` directly with a store holding the workspace. */
 async function runTrace(
@@ -163,7 +164,7 @@ describe('wc_trace backward', () => {
     expect(text).toContain('localStorage.setItem');
     expect(text).toContain('res.json');
     expect(text).toContain('src/api.js:3  init');
-    expect(text).toContain('Sinks: none found.');
+    expect(text).toContain('localStorage.setItem at src/api.js:8');
   });
 
   test('module:line seeds the identifiers on that line', async () => {
@@ -241,6 +242,104 @@ describe('wc_trace errors', () => {
       runTrace(fixtureWorkspace(), { value: 'logni' }),
     ).rejects.toThrow(/login/);
   });
+
+  test('a JSON-quoted value with escaped quotes resolves to the literal', async () => {
+    const ws = fixtureWorkspace();
+    ws.modules.set('quoted.js', {
+      path: 'quoted.js',
+      bundleId: '9',
+      isEntry: false,
+      code: 'fetch("say \\"hi\\"");',
+      tags: [],
+    });
+    ws.index = buildIndex(ws.modules);
+    const output = await runTrace(ws, {
+      value: JSON.stringify('say "hi"'),
+      direction: 'forward',
+    });
+    expect(output).toContain('fetch at quoted.js:1');
+  });
+});
+
+test('a sink line starts from its arguments rather than a helper callee', async () => {
+  const ws = fixtureWorkspace();
+  ws.modules.set('beacon.js', {
+    path: 'beacon.js',
+    bundleId: '9',
+    isEntry: false,
+    code: [
+      'function td() { return navigator; }',
+      'function send(k, G) {',
+      '  return td().sendBeacon(k.toString(), G.Bk());',
+      '}',
+    ].join('\n'),
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  const result = await runTrace(ws, {
+    value: 'beacon.js:3',
+    direction: 'backward',
+  });
+  expect(result).toContain('2 seeds.');
+  expect(result).toContain('sendBeacon at beacon.js:3');
+  expect(result).toContain('beacon.js:2  param');
+  expect(result).not.toContain('beacon.js:1  init');
+});
+
+test('backward trace crosses a direct callback through its invoker', async () => {
+  const ws = fixtureWorkspace();
+  ws.modules.set('callback.js', {
+    path: 'callback.js',
+    bundleId: '10',
+    isEntry: false,
+    code: [
+      'function each(callback) {',
+      '  const payload = "message";',
+      '  callback("/log", payload);',
+      '}',
+      'function report() {',
+      '  each((url, body) => {',
+      '    fetch(url.toString(), body.Bk());',
+      '  });',
+      '}',
+    ].join('\n'),
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  const result = await runTrace(ws, {
+    value: 'callback.js:7',
+    direction: 'backward',
+  });
+  expect(result).toContain('callback.js:3  arg');
+  expect(result).toContain('callback.js:2  init');
+  expect(result).toContain('"message"');
+});
+
+test('backward trace finds block-scoped values passed to a callback sink', async () => {
+  const ws = fixtureWorkspace();
+  ws.modules.set('blocks.js', {
+    path: 'blocks.js',
+    bundleId: '11',
+    isEntry: false,
+    code: [
+      'function invoke(callback) {',
+      '  for (let i = 0; i < 1; i++) {',
+      '    let body = "payload";',
+      '    callback("/log", body);',
+      '  }',
+      '}',
+      'invoke((url, data) => navigator.sendBeacon(url, data));',
+    ].join('\n'),
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  const result = await runTrace(ws, {
+    value: 'blocks.js:7',
+    direction: 'backward',
+    maxSteps: 30,
+  });
+  expect(result).toContain('blocks.js:3  init');
+  expect(result).toContain('"payload"');
 });
 
 /** Module building an `Authorization` header from `"Bearer " + token`. */
@@ -312,4 +411,35 @@ describe('wc_trace values with surrounding whitespace', () => {
     expect(new Set(suggestions).size).toBe(suggestions.length);
     expect((err as WcError).message).toContain(JSON.stringify('Bearer '));
   });
+});
+
+test('approximate property writes are labelled assign~ and capped at three', async () => {
+  const ws = fixtureWorkspace();
+  ws.modules.clear();
+  ws.modules.set('p.js', {
+    path: 'p.js',
+    bundleId: '0',
+    isEntry: true,
+    code: [
+      'a.url = "/1";',
+      'b.url = "/2";',
+      'c.url = "/3";',
+      'd.url = "/4";',
+      'e.url = "/5";',
+      'function send(o) {',
+      '  fetch(o.url);',
+      '}',
+    ].join('\n'),
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  const { call } = await connect(ws);
+  const out = await call('wc_trace', {
+    value: 'p.js:7',
+    direction: 'backward',
+  });
+  const approx = out.split('\n').filter((line) => line.endsWith('  assign~'));
+  expect(approx).toHaveLength(3);
+  expect(out).not.toMatch(/p\.js:\d+ {2}assign$/m);
+  expect(out).toContain('shown as `assign~`');
 });
