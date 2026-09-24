@@ -262,7 +262,7 @@ pisarse:
       reinstalación de `node_modules`), tipar `Workspace.report` como `Report` y
       `interpreters` en `workspace/types.ts`, y rellenar `report` en
       `fixtureWorkspace()`.
-- [ ] **M0.3** `config.ts`: `WEBCRACK_MCP_ROOTS` (rutas permitidas, por
+- [x] **M0.3** `config.ts`: `WEBCRACK_MCP_ROOTS` (rutas permitidas, por
       defecto `cwd`), `WEBCRACK_MCP_CACHE`, `WEBCRACK_MCP_MAX_INPUT` (def. 20 MB),
       `WEBCRACK_MCP_TIMEOUT_MS` (def. 120 000), `WEBCRACK_MCP_OUTPUT_BUDGET`
       (def. 20 000 chars). Tests de parseo.
