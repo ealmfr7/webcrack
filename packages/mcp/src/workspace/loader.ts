@@ -1,5 +1,5 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { relative, resolve, sep } from 'node:path';
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { dirname, relative, resolve, sep } from 'node:path';
 import type { Config } from '../config';
 import { WcError } from '../format/errors';
 import type { LoadedSource } from './types';
@@ -96,23 +96,8 @@ async function loadPath(
         `Check the path, or pass literal code or an http(s) URL instead.`,
     );
   }
-  const roots: string[] = [];
-  for (const root of config.roots) {
-    try {
-      roots.push(await realpath(root));
-    } catch {
-      roots.push(resolve(root));
-    }
-  }
-  const match = roots.find(
-    (root) => real === root || real.startsWith(root + sep),
-  );
-  if (match === undefined) {
-    throw new WcError(
-      `Path ${JSON.stringify(real)} is outside the allowed roots (${roots.join(', ') || '(none)'}). ` +
-        `Move the file under one of them or set WEBCRACK_MCP_ROOTS to include it.`,
-    );
-  }
+  const checked = await checkInsideRoots(real, config);
+  const match = checked.match;
   let code: string;
   try {
     code = await readFile(real, 'utf8');
@@ -130,6 +115,96 @@ async function loadPath(
     );
   }
   return { kind: 'path', label: relative(match, real), code, bytes };
+}
+
+/** A real path known to sit inside `match` (one of the real roots). */
+interface RootsCheck {
+  roots: string[];
+  match: string;
+}
+
+/** Real paths of the configured roots (unresolvable roots stay resolved). */
+async function resolveRoots(config: Config): Promise<string[]> {
+  const roots: string[] = [];
+  for (const root of config.roots) {
+    try {
+      roots.push(await realpath(root));
+    } catch {
+      roots.push(resolve(root));
+    }
+  }
+  return roots;
+}
+
+/**
+ * Throw a `WcError` unless `real` (already a real path) sits inside one of
+ * the configured roots. Shared by `loadPath` and `assertInsideRoots` so
+ * both enforce exactly the same boundary with the same message.
+ */
+async function checkInsideRoots(
+  real: string,
+  config: Config,
+): Promise<RootsCheck> {
+  const roots = await resolveRoots(config);
+  const match = roots.find(
+    (root) => real === root || real.startsWith(root + sep),
+  );
+  if (match === undefined) {
+    throw new WcError(
+      `Path ${JSON.stringify(real)} is outside the allowed roots (${roots.join(', ') || '(none)'}). ` +
+        `Move the file under one of them or set WEBCRACK_MCP_ROOTS to include it.`,
+    );
+  }
+  return { roots, match };
+}
+
+/**
+ * Ensure `dir` is a directory inside the configured roots and return its
+ * real path. The directory may not exist yet: the nearest existing ancestor
+ * is resolved (following symlinks) and checked, then the full directory is
+ * created with `mkdir -p`. A symlink pointing outside the roots is refused,
+ * exactly like a path source in `loadSource`.
+ */
+export async function assertInsideRoots(
+  dir: string,
+  config: Config,
+): Promise<string> {
+  const resolved = resolve(dir);
+  let ancestor = resolved;
+  for (;;) {
+    try {
+      await stat(ancestor);
+      break;
+    } catch {
+      const parent = dirname(ancestor);
+      if (parent === ancestor) {
+        throw new WcError(
+          `Cannot resolve ${JSON.stringify(resolved)}: no existing ancestor directory. ` +
+            `Create one of its parent directories first, or pick a directory inside WEBCRACK_MCP_ROOTS.`,
+        );
+      }
+      ancestor = parent;
+    }
+  }
+  let realAncestor: string;
+  try {
+    realAncestor = await realpath(ancestor);
+  } catch (error) {
+    throw new WcError(
+      `Cannot resolve ${JSON.stringify(resolved)}: ${(error as Error).message}. ` +
+        `Check the path, or pick a directory inside WEBCRACK_MCP_ROOTS instead.`,
+    );
+  }
+  await checkInsideRoots(realAncestor, config);
+  try {
+    await mkdir(resolved, { recursive: true });
+  } catch (error) {
+    throw new WcError(
+      `Cannot create directory ${JSON.stringify(resolved)}: ${(error as Error).message}. ` +
+        `Check the path and its permissions, or pick another directory inside WEBCRACK_MCP_ROOTS.`,
+    );
+  }
+  return realpath(resolved);
 }
 
 /** Maximum redirects followed for `url` sources. */
