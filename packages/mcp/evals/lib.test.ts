@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   aggregate,
+  aggregateBySet,
   formatResultsRow,
   median,
   parseStreamJson,
@@ -81,13 +82,34 @@ describe("parseTasksJsonl", () => {
     const text = readFileSync(path.join(EVALS_DIR, "tasks.jsonl"), "utf8");
     const { tasks, errors } = parseTasksJsonl(text);
     expect(errors).toEqual([]);
-    expect(tasks.length).toBeGreaterThanOrEqual(10);
+    expect(tasks.length).toBeGreaterThanOrEqual(20);
+    expect(tasks.filter((t) => t.set === "v1").length).toBeGreaterThanOrEqual(13);
+    expect(tasks.filter((t) => t.set === "v2").length).toBeGreaterThanOrEqual(7);
     expect(
       validateSamples(tasks, (sample) => existsSync(path.join(CORPUS_DIR, sample))),
     ).toEqual([]);
     for (const task of tasks) {
       expect(task.prompt).toContain(`packages/webcrack/test/corpus/${task.sample}`);
+      expect(["v1", "v2"]).toContain(task.set);
     }
+  });
+
+  it("defaults a missing set to v1 and rejects unknown sets", () => {
+    const { tasks, errors } = parseTasksJsonl(
+      [
+        `{"id":"a","sample":"x.js","prompt":"p","check":{"type":"contains","value":"v"}}`,
+        `{"id":"b","sample":"y.js","prompt":"p","set":"v2","check":{"type":"contains","value":"v"}}`,
+      ].join("\n"),
+    );
+    expect(errors).toEqual([]);
+    expect(tasks.map((t) => t.set)).toEqual(["v1", "v2"]);
+
+    const bad = parseTasksJsonl(
+      `{"id":"c","sample":"y.js","prompt":"p","set":"v3","check":{"type":"contains","value":"v"}}`,
+    );
+    expect(bad.tasks).toEqual([]);
+    expect(bad.errors).toHaveLength(1);
+    expect(bad.errors[0]).toContain('"set"');
   });
 
   it("reports missing samples", () => {
@@ -187,6 +209,38 @@ describe("median", () => {
   });
 });
 
+describe("aggregateBySet", () => {
+  it("groups outcomes per set and always returns both keys", () => {
+    const bySet = aggregateBySet(
+      [
+        outcome({ id: "a", set: "v1", passed: true, toolCalls: 4 }),
+        outcome({ id: "b", set: "v1", passed: false, toolCalls: 12 }),
+        outcome({ id: "c", set: "v2", passed: true, toolCalls: 8 }),
+      ],
+      "2026-09-24",
+      "abc1234",
+    );
+    expect(bySet.v1.total).toBe(2);
+    expect(bySet.v1.solved).toBe(1);
+    expect(bySet.v1.set).toBe("v1");
+    expect(bySet.v2.total).toBe(1);
+    expect(bySet.v2.solved).toBe(1);
+    expect(bySet.v2.set).toBe("v2");
+    expect(bySet.v2.medianToolCalls).toBe(8);
+  });
+
+  it("counts outcomes without a set as v1", () => {
+    const bySet = aggregateBySet(
+      [outcome({ id: "a", passed: true })],
+      "2026-09-24",
+      "abc1234",
+    );
+    expect(bySet.v1.total).toBe(1);
+    expect(bySet.v2.total).toBe(0);
+    expect(bySet.v2.successPct).toBe(0);
+  });
+});
+
 describe("formatResultsRow", () => {
   it("produces a row with the same column count as the header", () => {
     const summary = aggregate(
@@ -199,5 +253,18 @@ describe("formatResultsRow", () => {
     expect(columns(row)).toBe(columns(RESULTS_HEADER));
     expect(row).toContain("1/1 (100.0%)");
     expect(row).toContain("2026-09-24");
+  });
+
+  it("includes the set in the row", () => {
+    const bySet = aggregateBySet(
+      [outcome({ id: "a", set: "v2", passed: true })],
+      "2026-09-24",
+      "abc1234",
+    );
+    const row = formatResultsRow(bySet.v2);
+    const columns = (line: string): number => line.split("|").length;
+    expect(columns(row)).toBe(columns(RESULTS_HEADER));
+    expect(row).toContain("v2");
+    expect(RESULTS_HEADER).toContain("Set");
   });
 });

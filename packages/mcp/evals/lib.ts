@@ -11,11 +11,18 @@ export type Check =
   | { type: "all-of"; checks: Check[] }
   | { type: "any-of"; checks: Check[] };
 
+export type EvalSet = "v1" | "v2";
+
+export function isEvalSet(value: unknown): value is EvalSet {
+  return value === "v1" || value === "v2";
+}
+
 export interface EvalTask {
   id: string;
   sample: string;
   prompt: string;
   check: Check;
+  set: EvalSet;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -88,6 +95,15 @@ export function validateTask(
   if (typeof prompt !== "string" || prompt.length === 0) {
     errors.push(`${path}: "prompt" must be a non-empty string`);
   }
+  // `set` is optional for back-compat and defaults to "v1".
+  let set: EvalSet = "v1";
+  if (raw["set"] !== undefined) {
+    if (!isEvalSet(raw["set"])) {
+      errors.push(`${path}: "set" must be "v1" or "v2"`);
+    } else {
+      set = raw["set"];
+    }
+  }
   const checkResult = validateCheck(raw["check"], path);
   errors.push(...checkResult.errors);
   if (errors.length > 0 || checkResult.check === undefined) return { errors };
@@ -98,6 +114,7 @@ export function validateTask(
       sample: sample as string,
       prompt: prompt as string,
       check: checkResult.check,
+      set,
     },
     errors: [],
   };
@@ -242,6 +259,7 @@ export function parseStreamJson(stdout: string): ParsedRun {
 
 export interface TaskOutcome {
   id: string;
+  set?: EvalSet;
   passed: boolean;
   toolCalls: number;
   webcrackCalls: number;
@@ -266,6 +284,7 @@ export function median(values: number[]): number {
 export interface EvalSummary {
   date: string;
   commit: string;
+  set?: EvalSet;
   total: number;
   solved: number;
   successPct: number;
@@ -296,14 +315,36 @@ export function aggregate(
   };
 }
 
-export const RESULTS_HEADER =
-  "| Date | Commit | Solved | Median tool calls | Input tokens | Output tokens | Cost (USD) |";
+/**
+ * Aggregate per-task outcomes grouped by eval set. Outcomes without a `set`
+ * are counted as "v1" (back-compat with runs recorded before sets existed).
+ * Both keys are always present so callers can render one RESULTS.md row per
+ * set without nil checks.
+ */
+export function aggregateBySet(
+  outcomes: TaskOutcome[],
+  date: string,
+  commit: string,
+): Record<EvalSet, EvalSummary> {
+  const bySet = (set: EvalSet): EvalSummary => ({
+    ...aggregate(
+      outcomes.filter((outcome) => (outcome.set ?? "v1") === set),
+      date,
+      commit,
+    ),
+    set,
+  });
+  return { v1: bySet("v1"), v2: bySet("v2") };
+}
 
-/** Format one RESULTS.md table row for a summary. */
+export const RESULTS_HEADER =
+  "| Date | Set | Commit | Solved | Median tool calls | Input tokens | Output tokens | Cost (USD) |";
+
+/** Format one RESULTS.md table row for a summary (includes the set). */
 export function formatResultsRow(summary: EvalSummary): string {
   const solved = `${summary.solved}/${summary.total} (${summary.successPct.toFixed(1)}%)`;
   return (
-    `| ${summary.date} | ${summary.commit} | ${solved} ` +
+    `| ${summary.date} | ${summary.set ?? "all"} | ${summary.commit} | ${solved} ` +
     `| ${summary.medianToolCalls} | ${summary.totalInputTokens} ` +
     `| ${summary.totalOutputTokens} | $${summary.totalCostUsd.toFixed(4)} |`
   );
