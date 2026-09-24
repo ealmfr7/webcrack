@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { webcrack } from 'webcrack';
 import type { Options as WebcrackOptions } from 'webcrack';
 import { detectInterpreters, extractReport } from 'webcrack/analysis';
-import type { InterpreterInfo } from 'webcrack/analysis';
+import type { InterpreterInfo, Report } from 'webcrack/analysis';
 import type { Config } from '../config';
 import { WcError } from '../format/errors';
 import {
@@ -169,6 +169,44 @@ function sliceIndex(index: WorkspaceIndex, modulePath: string): ModuleIndex {
 }
 
 /**
+ * Parse one module's clean code into its report and interpreter summaries
+ * (shared by `open` and `commit`).
+ */
+function analyzeModule(
+  modulePath: string,
+  code: string,
+): { report: Report; interpreters: InterpreterSummary[] } {
+  const ast = parse(code, {
+    sourceType: 'unambiguous',
+    allowReturnOutsideFunction: true,
+    errorRecovery: true,
+    plugins: ['jsx'],
+  });
+  return {
+    report: extractReport(ast),
+    interpreters: detectInterpreters(ast).map((info) =>
+      toInterpreterSummary(modulePath, info),
+    ),
+  };
+}
+
+/**
+ * Tag one module from the workspace index slice (shared by `open` and
+ * `commit`). `tags.ts` does not detect VM interpreters, so 'vm' is added
+ * here when the module has one.
+ */
+function retagModule(
+  module: ModuleEntry,
+  index: WorkspaceIndex,
+  interpreters: InterpreterSummary[],
+  tagModule: StoreDeps['tagModule'],
+): void {
+  const tags = tagModule(module, sliceIndex(index, module.path));
+  const hasVm = interpreters.some((info) => info.module === module.path);
+  module.tags = hasVm && !tags.includes('vm') ? [...tags, 'vm'] : tags;
+}
+
+/**
  * Open workspaces, kept in memory. The disk cache (ROADMAP_MCP §3.3, M1.2)
  * plugs in here: `open` reuses it, `listCached` enumerates it.
  */
@@ -277,16 +315,9 @@ export class WorkspaceStore {
     const report: Workspace['report'] = {};
     const interpreters: InterpreterSummary[] = [];
     for (const module of modules.values()) {
-      const ast = parse(module.code, {
-        sourceType: 'unambiguous',
-        allowReturnOutsideFunction: true,
-        errorRecovery: true,
-        plugins: ['jsx'],
-      });
-      report[module.path] = extractReport(ast);
-      for (const info of detectInterpreters(ast)) {
-        interpreters.push(toInterpreterSummary(module.path, info));
-      }
+      const analyzed = analyzeModule(module.path, module.code);
+      report[module.path] = analyzed.report;
+      interpreters.push(...analyzed.interpreters);
     }
     await progress(0.7, 'reports extracted');
 
@@ -294,10 +325,7 @@ export class WorkspaceStore {
     await progress(0.8, 'index built');
 
     for (const module of modules.values()) {
-      const tags = this.deps.tagModule(module, sliceIndex(index, module.path));
-      const hasVm = interpreters.some((info) => info.module === module.path);
-      // `tags.ts` does not detect VM interpreters, so add 'vm' here.
-      module.tags = hasVm && !tags.includes('vm') ? [...tags, 'vm'] : tags;
+      retagModule(module, index, interpreters, this.deps.tagModule);
     }
     await progress(0.85, 'modules tagged');
 
@@ -318,6 +346,38 @@ export class WorkspaceStore {
     this.add(workspace);
     await progress(1, `workspace ${id} ready`);
     return { workspace, cached: false };
+  }
+
+  /**
+   * Persist a mutation (M2.3, shared by every mutating tool): refresh the
+   * derived data for `changedPaths`, reindex the whole workspace, and write
+   * it back to the disk cache. Call it after editing `ws.modules` code or
+   * `ws.annotations` in place; with `[]` (e.g. a note-only annotation) it
+   * just reindexes and persists.
+   *
+   * On a cache load nothing is reapplied: `readWorkspaceFromCache` already
+   * reads the renamed `modules/<path>` code and `annotations.json`, so the
+   * workspace comes back exactly as committed.
+   */
+  async commit(ws: Workspace, changedPaths: string[]): Promise<void> {
+    const changed = [...new Set(changedPaths)];
+    for (const path of changed) {
+      const module = ws.modules.get(path);
+      if (!module) continue;
+      const analyzed = analyzeModule(path, module.code);
+      ws.report[path] = analyzed.report;
+      ws.interpreters = [
+        ...ws.interpreters.filter((info) => info.module !== path),
+        ...analyzed.interpreters,
+      ];
+    }
+    ws.index = this.deps.buildIndex(ws.modules);
+    for (const path of changed) {
+      const module = ws.modules.get(path);
+      if (!module) continue;
+      retagModule(module, ws.index, ws.interpreters, this.deps.tagModule);
+    }
+    await writeWorkspaceToCache(this.config, ws, WEBCRACK_VERSION);
   }
 
   /** One-line summaries of every disk-cached workspace (M1.2). */
