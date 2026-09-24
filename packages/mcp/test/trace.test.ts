@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { loadConfig } from '../src/config';
+import { WcError } from '../src/format/errors';
 import type { ToolContext } from '../src/tools/define';
 import { trace } from '../src/tools/trace';
 import { WorkspaceStore } from '../src/workspace/store';
@@ -239,5 +240,76 @@ describe('wc_trace errors', () => {
     await expect(
       runTrace(fixtureWorkspace(), { value: 'logni' }),
     ).rejects.toThrow(/login/);
+  });
+});
+
+/** Module building an `Authorization` header from `"Bearer " + token`. */
+const BEARER = `export function callApi(token) {
+  const fallback = "Bearer ";
+  return fetch("https://api.example.com/v1/data", {
+    headers: { Authorization: "Bearer " + token },
+  });
+}`;
+
+/** Fixture plus the bearer module (`"Bearer "` indexed twice, as in a real bundle). */
+function withBearer(): Workspace {
+  const ws = fixtureWorkspace();
+  ws.modules.set('src/auth.js', {
+    path: 'src/auth.js',
+    bundleId: '2',
+    isEntry: false,
+    code: BEARER,
+    tags: ['network', 'auth'],
+  });
+  ws.index.symbols.push({
+    module: 'src/auth.js',
+    name: 'callApi',
+    kind: 'function',
+    line: 1,
+    endLine: 6,
+    params: ['token'],
+    exported: true,
+    refCount: 0,
+  });
+  ws.index.calls.push({
+    module: 'src/auth.js',
+    line: 3,
+    callee: 'fetch',
+    caller: 'callApi',
+  });
+  ws.index.strings.push(
+    { module: 'src/auth.js', line: 2, value: 'Bearer ' },
+    {
+      module: 'src/auth.js',
+      line: 3,
+      value: 'https://api.example.com/v1/data',
+    },
+    { module: 'src/auth.js', line: 4, value: 'Bearer ' },
+  );
+  ws.index.imports['src/auth.js'] = [];
+  return ws;
+}
+
+describe('wc_trace values with surrounding whitespace', () => {
+  test('trailing-space value matches the exact literal and traces forward', async () => {
+    const text = await runTrace(withBearer(), {
+      value: 'Bearer ',
+      direction: 'forward',
+    });
+    expect(text).toContain('2 seeds.');
+    expect(text).toContain('src/auth.js:2  seed');
+    expect(text).toContain('src/auth.js:4  seed');
+    expect(text).toContain('Bearer');
+  });
+
+  test('suggestions are unique and show whitespace visibly', async () => {
+    const err: unknown = await runTrace(withBearer(), {
+      value: 'Bearar',
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WcError);
+    const suggestions = (err as WcError).suggestions;
+    expect(suggestions).toContain('Bearer ');
+    expect(new Set(suggestions).size).toBe(suggestions.length);
+    expect((err as WcError).message).toContain(JSON.stringify('Bearer '));
   });
 });

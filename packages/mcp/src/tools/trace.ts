@@ -420,20 +420,31 @@ class Tracer {
   // -- Seeds ---------------------------------------------------------------
 
   /**
-   * Resolve `value` to seeds: an exact `index.strings` match first, then an
-   * identifier / `module:name` via `resolveSymbol`, then `module:line`
-   * (identifiers and literals on that line). Unknown values throw a
-   * `WcError` with `suggest()` candidates.
+   * Resolve `value` to seeds: an exact `index.strings` match first (so
+   * values with surrounding whitespace like `"Bearer "` hit their literal),
+   * then the trimmed value against `index.strings`, then an identifier /
+   * `module:name` via `resolveSymbol`, then `module:line` (identifiers and
+   * literals on that line). Unknown values throw a `WcError` with deduped
+   * `suggest()` candidates, rendered JSON-quoted so whitespace is visible.
    */
   private resolveSeeds(value: string): Seed[] {
+    const toSeed = (s: { module: string; line: number; value: string }) => ({
+      module: s.module,
+      line: s.line,
+      literal: s.value,
+    });
+    const exactHits = this.ws.index.strings.filter((s) => s.value === value);
+    if (exactHits.length > 0) {
+      return exactHits.map(toSeed);
+    }
     const input = value.trim();
-    const literalHits = this.ws.index.strings.filter((s) => s.value === input);
-    if (literalHits.length > 0) {
-      return literalHits.map((s) => ({
-        module: s.module,
-        line: s.line,
-        literal: s.value,
-      }));
+    if (input !== value) {
+      const trimmedHits = this.ws.index.strings.filter(
+        (s) => s.value === input,
+      );
+      if (trimmedHits.length > 0) {
+        return trimmedHits.map(toSeed);
+      }
     }
     try {
       const symbol = resolveSymbol(this.ws, input);
@@ -464,13 +475,18 @@ class Tracer {
       ) {
         throw symbolError;
       }
-      const candidates = suggest(input, [
-        ...this.ws.index.symbols.map((s) => s.name),
-        ...this.ws.index.symbols.map((s) => `${s.module}:${s.name}`),
-        ...this.ws.index.strings.map((s) => s.value),
-      ]);
+      // Dedupe the pool: one repeated literal (e.g. "Bearer " used in
+      // several places) must not be suggested several times over.
+      const candidates = suggest(
+        input,
+        new Set([
+          ...this.ws.index.symbols.map((s) => s.name),
+          ...this.ws.index.symbols.map((s) => `${s.module}:${s.name}`),
+          ...this.ws.index.strings.map((s) => s.value),
+        ]),
+      );
       throw new WcError(
-        `Unknown value ${JSON.stringify(value)}: no matching string literal, symbol or module:line.${candidates.length > 0 ? ` Did you mean ${candidates.map((c) => `\`${c}\``).join(', ')}?` : ''} Call wc_search to find similar code.`,
+        `Unknown value ${JSON.stringify(value)}: no matching string literal, symbol or module:line.${candidates.length > 0 ? ` Did you mean ${candidates.map((c) => `\`${JSON.stringify(c)}\``).join(', ')}?` : ''} Call wc_search to find similar code.`,
         candidates,
       );
     }
