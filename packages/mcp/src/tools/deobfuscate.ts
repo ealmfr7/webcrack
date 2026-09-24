@@ -9,10 +9,11 @@ import {
   extractReport,
 } from 'webcrack/analysis';
 import type { InterpreterInfo } from 'webcrack/analysis';
-import { WcError, notImplemented } from '../format/errors';
+import { WcError } from '../format/errors';
 import { textResult } from '../format/response';
 import { resolveTarget } from '../format/target';
 import { writeWorkspaceToCache } from '../workspace/cache';
+import { evaluateInModule } from '../workspace/sandbox';
 import type {
   InterpreterSummary,
   ModuleEntry,
@@ -330,7 +331,7 @@ export const deobfuscate = defineTool({
   name: 'wc_deobfuscate',
   title: 'Deobfuscate region',
   description:
-    'Run webcrack deobfuscation passes on a module, line range or symbol and show a before/after diff (apply=true saves it into the workspace). Only the slice is in context: string-array decoders defined outside it are not applied — pass `expression` to evaluate those in the sandbox instead.',
+    'Run webcrack deobfuscation passes on a module, line range or symbol and show a before/after diff (apply=true saves it into the workspace). Only the slice is in context: string-array decoders defined outside it are not applied — pass `expression` to evaluate a decoder call (e.g. `_0x1a2b(0x1a3)`) against a module in the sandbox instead.',
   inputSchema: {
     workspace: workspaceArg,
     target: z
@@ -357,7 +358,37 @@ export const deobfuscate = defineTool({
     openWorldHint: false,
   },
   handler: async (args, ctx) => {
-    if (args.expression !== undefined) return notImplemented('C1b');
+    if (args.expression !== undefined) {
+      const ws = ctx.store.get(args.workspace);
+      // The whole module is preloaded (not a slice): decoders are often
+      // defined far from the call site. Without a target, empty code.
+      let code = '';
+      let moduleLabel = '(no module)';
+      if (args.target !== undefined) {
+        const resolved = resolveTarget(ws, args.target);
+        const entry = ws.modules.get(resolved.module);
+        if (!entry) {
+          throw new WcError(
+            `Unknown module "${resolved.module}". Call wc_map to list modules.`,
+          );
+        }
+        code = entry.code;
+        moduleLabel = entry.path;
+      }
+      // Sandbox errors (rejected injection, timeout, missing isolated-vm)
+      // already come back as WcError: pass them through.
+      const result = await evaluateInModule(code, args.expression, {
+        timeoutMs: Math.min(ctx.config.timeoutMs, 5000),
+        memoryLimitMb: 128,
+      });
+      const body =
+        `expression in ${moduleLabel} (sandbox)\n` +
+        `\`\`\`\n${result}\n\`\`\``;
+      return textResult(body, {
+        budget: ctx.config.outputBudget,
+        next: [`wc_read ${moduleLabel}`, `wc_annotate ${moduleLabel}:<name>`],
+      });
+    }
     if (args.target === undefined) {
       throw new WcError(
         'Pass a target: a module ("src/api.js"), a range ("src/api.js:100-160") or a symbol ("src/api.js:login").',

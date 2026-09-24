@@ -301,10 +301,47 @@ describe('wc_deobfuscate', () => {
     expect(text).toMatch(/timed out after 50 ms/);
   });
 
-  test('expression defers to the C1b task', async () => {
+  test('expression evaluates a decoder call against the whole module', async () => {
+    const { call, store } = await setup({});
+    store.get('deob1').modules.set('dec.js', {
+      path: 'dec.js',
+      bundleId: '1',
+      isEntry: false,
+      code: 'var _0xabc = ["hello", "world"];\nfunction _0x1a2b(i) { return _0xabc[i]; }\n',
+      tags: [],
+    });
+    // The range names line 2 but the string table lives on line 1: the
+    // whole module is preloaded, not the slice.
+    const text = await call('wc_deobfuscate', {
+      target: 'dec.js:2-2',
+      expression: '_0x1a2b(0) + " " + _0x1a2b(1)',
+    });
+    expect(text).toContain('expression in dec.js (sandbox)');
+    expect(text).toContain('```\nhello world\n```');
+    expect(text).toContain('Next: wc_read dec.js · wc_annotate dec.js:<name>');
+  });
+
+  test('expression without a target evaluates against empty code', async () => {
+    const { call } = await setup({});
+    const text = await call('wc_deobfuscate', { expression: '1 + 1' });
+    expect(text).toContain('expression in (no module) (sandbox)');
+    expect(text).toContain('```\n2\n```');
+  });
+
+  test('an injected expression is rejected', async () => {
     const { call } = await setup({});
     await expect(
-      call('wc_deobfuscate', { target: 'obf.js:6-6', expression: '1 + 1' }),
-    ).rejects.toThrow('C1b');
+      call('wc_deobfuscate', {
+        target: 'obf.js',
+        expression: '1)}; process.exit(); //',
+      }),
+    ).rejects.toThrow('Invalid expression');
   });
+
+  // NOTE: no test for an injected failing sandbox factory: evaluateInModule
+  // accepts one via opts.sandboxFactory, but deobfuscate has no deps channel
+  // for it (StoreDeps in workspace/store.ts carries only webcrack/loadSource/
+  // buildIndex/tagModule, and store.ts is out of scope for this task), so
+  // there is nothing to inject through.
+  test.skip('an injected failing sandbox factory surfaces sandbox errors', () => {});
 });
