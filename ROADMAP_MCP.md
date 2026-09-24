@@ -360,7 +360,7 @@ pisarse:
 
 - [x] **M3.1** `wc_export` (código con renames, `report.json`, `notes.md`,
       grafos `.dot`).
-- [ ] **M3.2** Prompt MCP `audit`: guía el flujo abrir → map → findings →
+- [x] **M3.2** Prompt MCP `audit`: guía el flujo abrir → map → findings →
       investigar (goto/refs/read/annotate) → informe final.
 - [x] **M3.3** Resources MCP: `webcrack://<ws>/module/<ruta>` y
       `webcrack://<ws>/report` para clientes que prefieran adjuntar recursos.
