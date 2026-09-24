@@ -366,12 +366,7 @@ export class WorkspaceStore {
     }
     await progress(0.85, 'modules tagged');
 
-    // D7 adds an optional 4th `opts?: { deobfuscated?: boolean }` param to
-    // `detectTechniques` in parallel: call through an untyped wrapper so this
-    // compiles (and runs) with or without it.
-    const detect = (this.deps.detectTechniques ?? detectTechniques) as (
-      ...args: unknown[]
-    ) => string[];
+    const detect = this.deps.detectTechniques ?? detectTechniques;
     const techniques = detect(
       loaded.code,
       [...modules.values()].map((module) => module.code),
@@ -390,7 +385,7 @@ export class WorkspaceStore {
       interpreters,
       annotations: [],
       stats: { openMs: Date.now() - startedAt, techniques },
-      findings: precomputeModuleFindings(modules.values()),
+      findings: precomputeModuleFindings(modules.values(), { cache: false }),
     };
     await progress(0.92, 'writing cache');
     await writeWorkspaceToCache(this.config, workspace, WEBCRACK_VERSION);
@@ -429,7 +424,7 @@ export class WorkspaceStore {
       // `ws.findings` is still valid. Workspaces without it (old caches)
       // keep falling back to on-demand parsing.
       if (ws.findings !== undefined) {
-        ws.findings[path] = collectModuleAstFindings(module);
+        ws.findings[path] = collectModuleAstFindings(module, { cache: false });
       }
     }
     ws.index = this.deps.buildIndex(ws.modules);
