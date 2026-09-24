@@ -2,10 +2,11 @@
 
 import { CommanderError } from 'commander';
 import debug from 'debug';
-import { runCli } from './cli-lib.js';
+import { installStdoutEpipeGuard, runCli } from './cli-lib.js';
 
 debug.enable('webcrack:*');
 
+installStdoutEpipeGuard(process.stdout);
 runCli(process.argv, {
   stdout: process.stdout,
   stderr: process.stderr,
