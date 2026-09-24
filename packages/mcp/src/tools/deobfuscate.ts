@@ -1,4 +1,6 @@
 import { parse } from '@babel/parser';
+import { VISITOR_KEYS } from '@babel/types';
+import type { File, Node } from '@babel/types';
 import { z } from 'zod';
 import { createNodeSandbox } from 'webcrack/analysis';
 import { WcError } from '../format/errors';
@@ -45,9 +47,81 @@ interface Slice {
   end: number;
 }
 
+/** The `Node` fields that hold statement lists a slice can be cut from. */
+const STATEMENT_LISTS: Record<string, string> = {
+  Program: 'body',
+  BlockStatement: 'body',
+  StaticBlock: 'body',
+  SwitchCase: 'consequent',
+};
+
 /**
- * Widen a line range to the enclosing complete top-level statements, so the
- * slice parses on its own.
+ * Candidate slices, outermost first: at every statement list whose node
+ * contains the requested lines, the run of sibling statements overlapping
+ * them. Only nodes containing the whole range are descended into, so a
+ * range deep inside a 160k-line IIFE costs its nesting depth, not a full
+ * traversal.
+ */
+function candidateSlices(
+  ast: File,
+  lines: string[],
+  start: number,
+  end: number,
+): { start: number; end: number }[] {
+  const found: { start: number; end: number }[] = [];
+  const clean = (first: Node, last: Node): boolean => {
+    const a = first.loc;
+    const b = last.loc;
+    if (!a || !b) return false;
+    const before = lines[a.start.line - 1]?.slice(0, a.start.column) ?? '';
+    const after = lines[b.end.line - 1]?.slice(b.end.column) ?? '';
+    return before.trim() === '' && /^[\s;]*$/.test(after);
+  };
+  const visit = (node: Node): void => {
+    const listKey = STATEMENT_LISTS[node.type];
+    for (const key of VISITOR_KEYS[node.type] ?? []) {
+      const value = (node as unknown as Record<string, unknown>)[key];
+      const children = (Array.isArray(value) ? value : [value]).filter(
+        (c): c is Node =>
+          typeof c === 'object' && c !== null && 'type' in c && 'loc' in c,
+      );
+      if (key === listKey) {
+        const overlapping = children.filter(
+          (c) =>
+            c.loc !== null &&
+            c.loc !== undefined &&
+            c.loc.start.line <= end &&
+            c.loc.end.line >= start,
+        );
+        const first = overlapping[0];
+        const last = overlapping[overlapping.length - 1];
+        if (
+          first?.loc &&
+          last?.loc &&
+          first.loc.start.line <= start &&
+          last.loc.end.line >= end &&
+          clean(first, last)
+        ) {
+          found.push({ start: first.loc.start.line, end: last.loc.end.line });
+        }
+      }
+      for (const child of children) {
+        const loc = child.loc;
+        if (loc && loc.start.line <= start && loc.end.line >= end) {
+          visit(child);
+        }
+      }
+    }
+  };
+  visit(ast.program);
+  return found;
+}
+
+/**
+ * Cut the smallest run of whole sibling statements covering the requested
+ * lines that parses on its own (e.g. two statements of an `else` block, not
+ * the whole `if`; a statement inside an IIFE, not the IIFE). Blank and
+ * comment-only lines at the edges of the range are ignored.
  */
 function widenToStatements(
   entry: ModuleEntry,
@@ -55,28 +129,96 @@ function widenToStatements(
   start: number,
   end: number,
 ): Slice {
+  const lines = entry.code.split('\n');
+  const blank = (line: string | undefined): boolean =>
+    line === undefined || /^\s*(?:\/\/.*|\/\*.*\*\/\s*)?$/.test(line);
+  let from = start;
+  let to = Math.min(end, lines.length);
+  while (from < to && blank(lines[from - 1])) from++;
+  while (to > from && blank(lines[to - 1])) to--;
   const ast = parse(entry.code, {
     sourceType: 'unambiguous',
     allowReturnOutsideFunction: true,
     errorRecovery: true,
     plugins: ['jsx'],
   });
-  let from = Number.POSITIVE_INFINITY;
-  let to = Number.NEGATIVE_INFINITY;
-  for (const statement of ast.program.body) {
-    const loc = statement.loc;
-    if (loc === null || loc === undefined) continue;
-    if (loc.start.line <= end && loc.end.line >= start) {
-      from = Math.min(from, loc.start.line);
-      to = Math.max(to, loc.end.line);
-    }
-  }
-  if (from === Number.POSITIVE_INFINITY) {
+  const candidates = candidateSlices(ast, lines, from, to);
+  if (candidates.length === 0) {
     throw new WcError(
       `Target "${target}" covers no complete statement: range must cover whole statements; use module:symbol (e.g. "${entry.path}:1-3" must include every statement it touches).`,
     );
   }
-  return { entry, start: from, end: to };
+  let chosen: { start: number; end: number } | undefined;
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i];
+    if (sliceParses(lines.slice(c.start - 1, c.end).join('\n'))) {
+      chosen = c;
+      break;
+    }
+  }
+  chosen ??= candidates[0];
+  const actual = chosen.end - chosen.start + 1;
+  const requested = end - start + 1;
+  if (actual > Math.max(200, requested * 20)) {
+    throw new WcError(
+      `Target "${target}" expands from ${requested} to ${actual} lines (${entry.path}:${chosen.start}-${chosen.end}), the smallest run of whole statements containing it. Choose a smaller complete statement, or pass the module itself to process all of it.`,
+    );
+  }
+  return { entry, start: chosen.start, end: chosen.end };
+}
+
+/**
+ * 1-based lines that continue a multi-line template literal: their leading
+ * whitespace is string content, so they are never re-indented.
+ */
+function templateContinuationLines(code: string): Set<number> {
+  const inner = new Set<number>();
+  if (!code.includes('`')) return inner;
+  let ast: File;
+  try {
+    ast = parse(code, {
+      sourceType: 'unambiguous',
+      allowReturnOutsideFunction: true,
+      errorRecovery: true,
+      plugins: ['jsx'],
+    });
+  } catch {
+    return inner;
+  }
+  const visit = (node: Node): void => {
+    if (node.type === 'TemplateLiteral' && node.loc) {
+      for (let l = node.loc.start.line + 1; l <= node.loc.end.line; l++) {
+        inner.add(l);
+      }
+    }
+    for (const key of VISITOR_KEYS[node.type] ?? []) {
+      const value = (node as unknown as Record<string, unknown>)[key];
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (typeof child === 'object' && child !== null && 'type' in child) {
+          visit(child as Node);
+        }
+      }
+    }
+  };
+  visit(ast.program);
+  return inner;
+}
+
+/** Leading whitespace shared by every non-blank line. */
+function commonIndent(lines: string[]): string {
+  let indent: string | undefined;
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    const own = /^[ \t]*/.exec(line)?.[0] ?? '';
+    if (indent === undefined) indent = own;
+    else {
+      let i = 0;
+      while (i < indent.length && i < own.length && indent[i] === own[i]) i++;
+      indent = indent.slice(0, i);
+    }
+    if (indent === '') return '';
+  }
+  return indent ?? '';
 }
 
 function extractSlice(ws: Workspace, target: string): Slice {
@@ -97,19 +239,26 @@ function extractSlice(ws: Workspace, target: string): Slice {
   return widenToStatements(entry, target, resolved.start, resolved.end);
 }
 
-/** The slice must parse on its own, or webcrack would read half a statement. */
-function assertSliceParses(
-  slice: string,
-  target: string,
-  sliceRef: string,
-): void {
+function sliceParses(slice: string): boolean {
   try {
     parse(slice, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       plugins: ['jsx'],
     });
+    return true;
   } catch {
+    return false;
+  }
+}
+
+/** The slice must parse on its own, or webcrack would read half a statement. */
+function assertSliceParses(
+  slice: string,
+  target: string,
+  sliceRef: string,
+): void {
+  if (!sliceParses(slice)) {
     throw new WcError(
       `Target "${target}" (${sliceRef}) does not parse on its own: range must cover whole statements; use module:symbol.`,
     );
@@ -308,7 +457,12 @@ export const deobfuscate = defineTool({
     const ws = ctx.store.get(args.workspace);
     const { entry, start, end } = extractSlice(ws, target);
     const moduleLines = entry.code.split('\n');
-    const slice = moduleLines.slice(start - 1, end).join('\n');
+    const sliceLines = moduleLines.slice(start - 1, end);
+    const slice = sliceLines.join('\n');
+    // A slice cut from inside a function is indented; webcrack prints from
+    // column 0, so process it dedented and indent the result back.
+    const indent =
+      templateContinuationLines(slice).size > 0 ? '' : commonIndent(sliceLines);
     if (start !== 1 || end !== moduleLines.length) {
       assertSliceParses(slice, target, `${entry.path}:${start}-${end}`);
     }
@@ -317,28 +471,41 @@ export const deobfuscate = defineTool({
     const selected = new Set(effective);
     const startedAt = Date.now();
     const result = await withTimeout(
-      ctx.store.deps.webcrack(slice, {
-        unpack: false,
-        deobfuscate: selected.has('deobfuscate'),
-        unminify: selected.has('unminify'),
-        jsx: selected.has('jsx'),
-        mangle: selected.has('mangle'),
-        renameHeuristics: selected.has('renameHeuristics'),
-        sandbox: createNodeSandbox({
-          timeout: Math.min(ctx.config.timeoutMs, 10_000),
-          memoryLimit: 128,
-        }),
-      }),
+      ctx.store.deps.webcrack(
+        indent === ''
+          ? slice
+          : sliceLines.map((line) => line.slice(indent.length)).join('\n'),
+        {
+          unpack: false,
+          deobfuscate: selected.has('deobfuscate'),
+          unminify: selected.has('unminify'),
+          jsx: selected.has('jsx'),
+          mangle: selected.has('mangle'),
+          renameHeuristics: selected.has('renameHeuristics'),
+          sandbox: createNodeSandbox({
+            timeout: Math.min(ctx.config.timeoutMs, 10_000),
+            memoryLimit: 128,
+          }),
+        },
+      ),
       ctx.config.timeoutMs,
     );
     const ms = Date.now() - startedAt;
-    const cleanLines = result.code.split('\n');
+    const keep =
+      indent === ''
+        ? new Set<number>()
+        : templateContinuationLines(result.code);
+    const cleanLines = result.code
+      .split('\n')
+      .map((line, i) =>
+        line === '' || indent === '' || keep.has(i + 1) ? line : indent + line,
+      );
     if (cleanLines.length > 0 && cleanLines[cleanLines.length - 1] === '') {
       cleanLines.pop();
     }
     const beforeLines = slice.split('\n');
 
-    const header = `wc_deobfuscate ${target} · passes: ${effective.join(', ')} · ${ms} ms`;
+    const header = `wc_deobfuscate ${target} · processed ${entry.path}:${start}-${end} · passes: ${effective.join(', ')} · ${ms} ms`;
     const hunks = unifiedDiff(beforeLines, cleanLines);
     let body =
       hunks.length > 0

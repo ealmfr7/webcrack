@@ -180,6 +180,12 @@ describe('wc_deobfuscate', () => {
     expect(text).toContain('+var seq = 3;');
   });
 
+  test('real webcrack accepts a return statement selected inside a function', async () => {
+    const { call } = await setup({});
+    const text = await call('wc_deobfuscate', { target: 'obf.js:4-4' });
+    expect(text).toContain('processed obf.js:4-4');
+  });
+
   test('a range is widened to the enclosing statements', async () => {
     const seen: string[] = [];
     const { call } = await setup({
@@ -190,12 +196,128 @@ describe('wc_deobfuscate', () => {
         },
       ),
     });
-    // Line 4 sits inside `greet` (lines 2-5): the slice is the whole function.
+    // Line 4 is a complete return statement inside `greet`.
     const text = await call('wc_deobfuscate', { target: 'obf.js:4-4' });
-    expect(seen).toEqual([
-      'function greet() {\n  var flag = !0;\n  return table[0] + " " + table[1] + flag;\n}',
-    ]);
-    expect(text).toContain('+// decoded');
+    expect(seen).toEqual(['return table[0] + " " + table[1] + flag;']);
+    expect(text).toContain('processed obf.js:4-4');
+    // Processed dedented, printed back at the block's indentation.
+    expect(text).toContain('+  // decoded');
+  });
+
+  test('a line in an IIFE processes only its smallest complete statement', async () => {
+    const seen: string[] = [];
+    const { call, store } = await setup({
+      webcrack: fakeWebcrack(
+        (code) => code,
+        (code) => seen.push(code),
+      ),
+    });
+    store.get('deob1').modules.set('player.js', {
+      path: 'player.js',
+      bundleId: '1',
+      isEntry: false,
+      code: '(function() {\n  var x = 1;\n  fetch(x);\n})();',
+      tags: [],
+    });
+    const output = await call('wc_deobfuscate', {
+      target: 'player.js:3-3',
+    });
+    expect(seen).toEqual(['fetch(x);']);
+    expect(output).toContain('processed player.js:3-3');
+  });
+
+  test('a range over sibling statements, or inside an else block, is cut there', async () => {
+    const seen: string[] = [];
+    const { call, store } = await setup({
+      webcrack: fakeWebcrack(
+        (code) => code,
+        (code) => seen.push(code),
+      ),
+    });
+    store.get('deob1').modules.set('flat.js', {
+      path: 'flat.js',
+      bundleId: '2',
+      isEntry: false,
+      code: 'var a = 1;\nvar b = 2;\nvar c = 3;\nvar d = 4;',
+      tags: [],
+    });
+    store.get('deob1').modules.set('branch.js', {
+      path: 'branch.js',
+      bundleId: '3',
+      isEntry: false,
+      code: 'if (x) {\n  a();\n} else {\n  b();\n  c();\n}',
+      tags: [],
+    });
+    expect(await call('wc_deobfuscate', { target: 'flat.js:2-3' })).toContain(
+      'processed flat.js:2-3',
+    );
+    expect(await call('wc_deobfuscate', { target: 'branch.js:4-5' })).toContain(
+      'processed branch.js:4-5',
+    );
+    expect(seen).toEqual(['var b = 2;\nvar c = 3;', 'b();\nc();']);
+  });
+
+  test('apply keeps the indentation of a slice cut from inside a function', async () => {
+    const { call, store } = await setup({
+      webcrack: fakeWebcrack((code) =>
+        code.replace('!0', 'true').replace('`\nkeep`', '`\n  kept`'),
+      ),
+    });
+    const ws = store.get('deob1');
+    ws.modules.set('nested.js', {
+      path: 'nested.js',
+      bundleId: '4',
+      isEntry: false,
+      code: 'function f() {\n  var flag = !0;\n  var s = `\nkeep`;\n}',
+      tags: [],
+    });
+    await call('wc_deobfuscate', { target: 'nested.js:2-2', apply: true });
+    expect(ws.modules.get('nested.js')?.code).toBe(
+      'function f() {\n  var flag = true;\n  var s = `\nkeep`;\n}',
+    );
+    // A multi-line template in the output keeps its inner lines byte for
+    // byte: only the first line of the statement is re-indented.
+    const { call: call2, store: store2 } = await setup({
+      webcrack: fakeWebcrack(() => 'var s = `a\nb`;'),
+    });
+    const ws2 = store2.get('deob1');
+    ws2.modules.set('nested.js', {
+      path: 'nested.js',
+      bundleId: '4',
+      isEntry: false,
+      code: 'function f() {\n  var s = "a\\nb";\n}',
+      tags: [],
+    });
+    await call2('wc_deobfuscate', { target: 'nested.js:2-2', apply: true });
+    expect(ws2.modules.get('nested.js')?.code).toBe(
+      'function f() {\n  var s = `a\nb`;\n}',
+    );
+  });
+
+  test('refuses an unexpectedly large expansion before calling webcrack', async () => {
+    const seen: string[] = [];
+    const { call, store } = await setup({
+      webcrack: fakeWebcrack(
+        (code) => code,
+        (code) => seen.push(code),
+      ),
+    });
+    const lines = [
+      '(function() {',
+      ...Array.from({ length: 220 }, () => '  var x = 1;'),
+      '})();',
+    ];
+    store.get('deob1').modules.set('large.js', {
+      path: 'large.js',
+      bundleId: '2',
+      isEntry: false,
+      code: lines.join('\n'),
+      tags: [],
+    });
+    await expect(
+      call('wc_deobfuscate', { target: 'large.js:1-1' }),
+    ).rejects.toThrow(/expands from 1 to 222 lines/);
+    expect(seen).toEqual([]);
   });
 
   test('a range over no statement is an actionable error', async () => {
