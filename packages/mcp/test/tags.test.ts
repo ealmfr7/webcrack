@@ -181,6 +181,53 @@ describe('tagModule', () => {
     }
   });
 
+  test('union with findings tables: bare roots, cookie calls, postMessage', () => {
+    // Bare storage/crypto roots (findings matches `name === root`).
+    for (const [callee, tag] of [
+      ['localStorage', 'storage'],
+      ['sessionStorage', 'storage'],
+      ['indexedDB', 'storage'],
+      ['crypto', 'crypto'],
+    ] as const) {
+      expect(
+        tagModule(
+          entry('a.js'),
+          slice('a.js', { calls: [call('a.js', callee)] }),
+        ),
+        callee,
+      ).toContain(tag);
+    }
+    // `document.cookie*` callees flag storage even when the code has no
+    // cookie property read for COOKIE_RE to see.
+    for (const callee of ['document.cookie', 'document.cookie.split']) {
+      expect(
+        tagModule(
+          entry('a.js'),
+          slice('a.js', { calls: [call('a.js', callee)] }),
+        ),
+        callee,
+      ).toContain('storage');
+    }
+    // `.postMessage` is a canonical sink suffix (findings) that also
+    // implies dom. Bare `postMessage` matches neither table (both require
+    // the dotted suffix).
+    for (const callee of ['worker.postMessage', '*.postMessage']) {
+      expect(
+        tagModule(
+          entry('a.js'),
+          slice('a.js', { calls: [call('a.js', callee)] }),
+        ),
+        callee,
+      ).toContain('dom');
+    }
+    expect(
+      tagModule(
+        entry('a.js'),
+        slice('a.js', { calls: [call('a.js', 'postMessage')] }),
+      ),
+    ).not.toContain('dom');
+  });
+
   test('vendor from path and from code banners/signatures', () => {
     for (const path of [
       'node_modules/react/index.js',

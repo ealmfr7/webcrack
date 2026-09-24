@@ -165,6 +165,22 @@ test('storage extras, crypto constants and dense bitwise ops', async () => {
   expect(crypto).toContain('dense bitwise ops');
 });
 
+test('crypto covers all crypto.* calls (union with tags)', () => {
+  const ws = fixtureWorkspace();
+  ws.modules.set('src/rand.js', {
+    path: 'src/rand.js',
+    bundleId: '2',
+    isEntry: false,
+    code: 'const r = crypto.getRandomValues(new Uint8Array(4));',
+    tags: [],
+  });
+  ws.report['src/rand.js'] = EMPTY_REPORT;
+  const titles = collectFindings(ws, 'crypto')
+    .filter((f) => f.module === 'src/rand.js')
+    .map((f) => f.title);
+  expect(titles).toContain('crypto.getRandomValues()');
+});
+
 test('regexes, interesting and vm', async () => {
   const { call } = await connect(richWorkspace());
   const regexes = await call('wc_findings', { category: 'regexes' });

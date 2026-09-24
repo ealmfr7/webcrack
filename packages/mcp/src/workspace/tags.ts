@@ -1,3 +1,9 @@
+import {
+  CRYPTO_APIS,
+  SINK_CALLEES,
+  SINK_CALLEE_SUFFIXES,
+  STORAGE_APIS,
+} from './findings';
 import type { ModuleEntry, ModuleIndex, ModuleTag } from './types';
 
 /**
@@ -7,9 +13,14 @@ import type { ModuleEntry, ModuleIndex, ModuleTag } from './types';
  *
  * `vm` is NEVER returned here: the store adds `vm` from
  * `detectInterpreters()` hits (interpreter loop + dispatch), which the
- * index slice cannot see. A wave-C task dedupes the callee tables below
- * against `workspace/findings.ts` (different owner) — keep them local
- * until then.
+ * index slice cannot see.
+ *
+ * Storage, crypto, and DOM-sink callee matching is single-sourced from
+ * `workspace/findings.ts` (`STORAGE_APIS`, `CRYPTO_APIS`, `SINK_CALLEES`,
+ * `SINK_CALLEE_SUFFIXES`). Network callees, auth keywords, and vendor
+ * signatures stay local: findings has no use for them. A callee matches a
+ * shared root when it equals the root or extends it with `.` (so
+ * `localStorage.setItem` and bare `localStorage` both hit).
  *
  * Callees are the normalized names from `index.calls` (`fetch`,
  * `axios.post`, `localStorage.setItem`, `*.json` for a local root). Every
@@ -22,13 +33,13 @@ import type { ModuleEntry, ModuleIndex, ModuleTag } from './types';
  * | `network` | call           | callee ends with `.open` or `.send` (covers `xhr.open`, `ws.send`, `*.open`, `*.send`) |
  * | `network` | string         | value starts with `http://` or `https://` |
  * | `auth`    | string         | value contains `authorization`, `bearer`, `token`, `login`, `password` or `jwt` (case-insensitive substring) |
- * | `crypto`  | call           | callee is `btoa` or `atob` |
- * | `crypto`  | call           | callee starts with `crypto.` (covers `crypto.subtle.*`, `crypto.getRandomValues`, …) |
- * | `storage` | call           | callee starts with `localStorage.`, `sessionStorage.` or `indexedDB.` |
- * | `storage` | code           | code matches `document.cookie` (cookie access is a property read, never a call site) |
+ * | `crypto`  | call           | callee is `btoa`/`atob`, is `crypto`, or starts with `crypto.` (covers `crypto.subtle.*`, `crypto.getRandomValues`, …) |
+ * | `storage` | call           | callee equals a storage root or extends it with `.` (`localStorage`, `localStorage.setItem`, …, `document.cookie`, `document.cookie.split`) |
+ * | `storage` | code           | code matches `document.cookie` (cookie access is usually a property read, never a call site) |
  * | `dom`     | call           | callee starts with `document.` or `window.` |
  * | `dom`     | call           | callee is `addEventListener` or ends with `.addEventListener` |
  * | `dom`     | call           | callee ends with `.innerHTML`, `.outerHTML`, `.createElement`, `.getElementById`, `.getElementsByTagName`, `.getElementsByClassName`, `.querySelector`, `.querySelectorAll`, `.appendChild` or `.removeChild` (covers `*.` roots from local aliases such as `var d = document`) |
+ * | `dom`     | call           | callee is a document sink (`document.write`, `document.writeln`) or ends with the `.postMessage` sink suffix |
  * | `vendor`  | path           | path contains `node_modules/`, a segment is exactly `vendor`, or a file/dir name is a known library name (react, lodash, jquery, vue, …), exactly or as a `name.`/`name-` prefix |
  * | `vendor`  | code           | code contains an `@license`/`@preserve` banner or a known library signature (`jQuery JavaScript Library`, `lodash`, `regeneratorRuntime`, `core-js`, `__REACT_DEVTOOLS_GLOBAL_HOOK__`) |
  */
@@ -65,20 +76,12 @@ export function tagModule(
     tags.add('auth');
   }
 
-  if (
-    calls.some(
-      (callee) =>
-        CRYPTO_CALLS.has(callee) ||
-        CRYPTO_PREFIXES.some((prefix) => callee.startsWith(prefix)),
-    )
-  ) {
+  if (calls.some((callee) => isCryptoCallee(callee))) {
     tags.add('crypto');
   }
 
   if (
-    calls.some((callee) =>
-      STORAGE_PREFIXES.some((prefix) => callee.startsWith(prefix)),
-    ) ||
+    calls.some((callee) => isStorageCallee(callee)) ||
     COOKIE_RE.test(module.code)
   ) {
     tags.add('storage');
@@ -89,7 +92,9 @@ export function tagModule(
       (callee) =>
         DOM_CALLS.has(callee) ||
         DOM_PREFIXES.some((prefix) => callee.startsWith(prefix)) ||
-        DOM_SUFFIXES.some((suffix) => callee.endsWith(suffix)),
+        DOM_SUFFIXES.some((suffix) => callee.endsWith(suffix)) ||
+        DOM_SINK_CALLS.has(callee) ||
+        DOM_SINK_SUFFIXES.some((suffix) => callee.endsWith(suffix)),
     )
   ) {
     tags.add('dom');
@@ -131,11 +136,40 @@ const AUTH_KEYWORDS = [
   'jwt',
 ];
 
-const CRYPTO_CALLS = new Set(['btoa', 'atob']);
-const CRYPTO_PREFIXES = ['crypto.'];
+/**
+ * Storage/crypto matchers over the canonical roots from `findings.ts`.
+ * `document.cookie` is covered here for `document.cookie*` callees; the
+ * `COOKIE_RE` code check below stays because cookie access is usually a
+ * property read, never a call site.
+ */
+function isStorageCallee(callee: string): boolean {
+  return STORAGE_APIS.some(
+    (root) => callee === root || callee.startsWith(`${root}.`),
+  );
+}
 
-const STORAGE_PREFIXES = ['localStorage.', 'sessionStorage.', 'indexedDB.'];
+function isCryptoCallee(callee: string): boolean {
+  return CRYPTO_APIS.some(
+    (root) => callee === root || callee.startsWith(`${root}.`),
+  );
+}
+
 const COOKIE_RE = /document\.cookie/;
+
+/**
+ * Sink callees that also imply DOM usage, derived from the canonical
+ * tables in `findings.ts` so the names stay single-sourced. The exact
+ * document sinks (`document.write`, `document.writeln`) overlap
+ * `DOM_PREFIXES` today; the `.postMessage` suffix (window/worker
+ * messaging) is the union addition — findings flags it as a sink, tags
+ * had no rule for it.
+ */
+const DOM_SINK_CALLS: ReadonlySet<string> = new Set(
+  Object.keys(SINK_CALLEES).filter((name) => name.startsWith('document.')),
+);
+const DOM_SINK_SUFFIXES: readonly string[] = Object.keys(
+  SINK_CALLEE_SUFFIXES,
+).filter((suffix) => suffix === '.postMessage');
 
 const DOM_CALLS = new Set(['addEventListener']);
 const DOM_PREFIXES = ['document.', 'window.'];
