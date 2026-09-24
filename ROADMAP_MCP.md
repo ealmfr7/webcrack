@@ -325,7 +325,7 @@ pisarse:
 - [ ] **M1.4** `workspace/tags.ts` + `wc_map`: etiquetas `network`, `auth`,
       `crypto`, `storage`, `dom`, `vm`, `vendor` (librería conocida). Heurística
       simple y documentada; tests con el corpus.
-- [ ] **M1.5** `wc_outline` y `wc_read` (todos los formatos de `target`,
+- [x] **M1.5** `wc_outline` y `wc_read` (todos los formatos de `target`,
       `view=raw` sobre el original por rango de líneas).
 - [ ] **M1.6** `wc_search` con `text`, `regex`, `string`, `identifier`,
       `call`. (El modo `ast` va en M2.5.)
