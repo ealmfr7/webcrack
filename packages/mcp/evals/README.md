@@ -7,29 +7,35 @@ solved with a median of ≤ 12 tool calls.
 ## Files
 
 - `tasks.jsonl`: one task per line:
-  `{"id", "sample", "prompt", "check"}`. `sample` is a file name in
+  `{"id", "sample", "prompt", "check", "set"}`. `sample` is a file name in
   `packages/webcrack/test/corpus`; prompts reference it as
   `packages/webcrack/test/corpus/<file>` (relative to the repo root).
   `check` is `{"type": "contains"|"regex", "value"}` or
   `{"type": "all-of"|"any-of", "checks": [...]}`. All matching is
-  case-insensitive.
+  case-insensitive. `set` is `"v1"` (original bundler/deobfuscation tasks)
+  or `"v2"` (navigation, trace, annotation and diff tasks); it is optional
+  and defaults to `"v1"`.
 - `mcp.json`: MCP config whose server path (`packages/mcp/dist/index.js`)
   resolves from the repo root — `run.ts` always spawns `claude` with the
   repo root as cwd.
 - `lib.ts`: pure logic (task validation, checkers, stream-json parser,
-  aggregation, RESULTS.md row formatting). Unit-tested by `lib.test.ts`.
+  aggregation incl. per-set `aggregateBySet`, RESULTS.md row formatting).
+  Unit-tested by `lib.test.ts`.
 - `run.ts`: runs each task with
   `claude -p <prompt> --mcp-config <absolute path to mcp.json> --strict-mcp-config --allowedTools mcp__webcrack --output-format stream-json --verbose`,
   applies the `check` to the final result text, and records pass/fail,
-  tool calls (webcrack vs other), turns and tokens.
-- `results/`: one `<date>-<commit>.json` per run (created on real runs).
-- `RESULTS.md`: one table row per run (created/appended on real runs).
+  tool calls (webcrack vs other), turns and tokens. `--set v1|v2|all`
+  (default `all`) restricts the run to one set.
+- `results/`: one `<date>-<commit>.json` per run (created on real runs,
+  with overall `summary` plus per-set `bySet`).
+- `RESULTS.md`: one table row per set per run (created/appended on real
+  runs; the `Set` column holds `v1`/`v2`).
 
 ## Usage (from the repo root)
 
 ```sh
-node --experimental-strip-types packages/mcp/evals/run.ts --dry-run
-node --experimental-strip-types packages/mcp/evals/run.ts [--only <id>] [--concurrency N]
+node --experimental-strip-types packages/mcp/evals/run.ts --dry-run [--set v1|v2|all]
+node --experimental-strip-types packages/mcp/evals/run.ts [--set v1|v2|all] [--only <id>] [--concurrency N]
 ```
 
 `--dry-run` validates the tasks, checks the samples exist, warns if

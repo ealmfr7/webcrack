@@ -4,7 +4,7 @@
 // MCP server and records accuracy, tool calls and tokens. NEVER invoked from
 // tests: spawning `claude` costs money. The user runs it by hand:
 //
-//   node --experimental-strip-types packages/mcp/evals/run.ts [--dry-run]
+//   node --experimental-strip-types packages/mcp/evals/run.ts [--dry-run] [--set v1|v2|all]
 //
 // `--dry-run` validates the tasks, checks the samples exist and warns when
 // the server build is missing. It spawns nothing.
@@ -21,12 +21,15 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   aggregate,
+  aggregateBySet,
   formatResultsRow,
+  isEvalSet,
   parseStreamJson,
   parseTasksJsonl,
   RESULTS_HEADER,
   runCheck,
   validateSamples,
+  type EvalSet,
   type EvalTask,
   type TaskOutcome,
 } from "./lib.ts";
@@ -42,9 +45,12 @@ const RESULTS_MD = path.join(EVALS_DIR, "RESULTS.md");
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
+export type SetFilter = EvalSet | "all";
+
 interface Options {
   dryRun: boolean;
   only?: string;
+  set: SetFilter;
   concurrency: number;
   timeoutMs: number;
 }
@@ -53,6 +59,7 @@ function parseArgs(argv: string[]): Options | { error: string } {
   const options: Options = {
     dryRun: false,
     only: undefined,
+    set: "all",
     concurrency: 1,
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
@@ -60,6 +67,13 @@ function parseArgs(argv: string[]): Options | { error: string } {
     const arg = argv[i] as string;
     if (arg === "--dry-run") {
       options.dryRun = true;
+    } else if (arg === "--set") {
+      const value = argv[i + 1];
+      if (value === undefined || (!isEvalSet(value) && value !== "all")) {
+        return { error: "--set needs v1, v2 or all" };
+      }
+      options.set = value as SetFilter;
+      i += 1;
     } else if (arg === "--only") {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("--")) {
@@ -144,6 +158,7 @@ function runClaude(task: EvalTask, timeoutMs: number): Promise<TaskOutcome> {
     child.on("error", (error: Error) => {
       resolve({
         id: task.id,
+        set: task.set,
         passed: false,
         toolCalls: 0,
         webcrackCalls: 0,
@@ -163,6 +178,7 @@ function runClaude(task: EvalTask, timeoutMs: number): Promise<TaskOutcome> {
             : `exit code ${code}: ${stderr.slice(-500)}`;
         resolve({
           id: task.id,
+          set: task.set,
           passed: false,
           toolCalls: 0,
           webcrackCalls: 0,
@@ -179,6 +195,7 @@ function runClaude(task: EvalTask, timeoutMs: number): Promise<TaskOutcome> {
       if (!parsed.hasResult) {
         resolve({
           id: task.id,
+          set: task.set,
           passed: false,
           toolCalls: parsed.toolCalls,
           webcrackCalls: parsed.webcrackCalls,
@@ -193,6 +210,7 @@ function runClaude(task: EvalTask, timeoutMs: number): Promise<TaskOutcome> {
       }
       resolve({
         id: task.id,
+          set: task.set,
         passed: runCheck(task.check, parsed.resultText),
         toolCalls: parsed.toolCalls,
         webcrackCalls: parsed.webcrackCalls,
@@ -228,17 +246,32 @@ async function mapPool<T, R>(
   return out;
 }
 
-function dryRun(only: string | undefined): void {
-  const tasks = loadTasks();
-  const selected = only === undefined ? tasks : tasks.filter((t) => t.id === only);
-  if (only !== undefined && selected.length === 0) {
-    throw new Error(`--only ${JSON.stringify(only)} matches no task`);
+function selectTasks(tasks: EvalTask[], options: Pick<Options, "only" | "set">): EvalTask[] {
+  const selected = tasks.filter(
+    (task) =>
+      (options.set === "all" || task.set === options.set) &&
+      (options.only === undefined || task.id === options.only),
+  );
+  if (selected.length === 0) {
+    throw new Error(
+      `--only ${JSON.stringify(options.only)} --set ${options.set} matches no task`,
+    );
   }
+  return selected;
+}
+
+function dryRun(options: Pick<Options, "only" | "set">): void {
+  const tasks = loadTasks();
+  const selected = selectTasks(tasks, options);
   if (!existsSync(MCP_CONFIG)) throw new Error(`missing ${MCP_CONFIG}`);
   JSON.parse(readFileSync(MCP_CONFIG, "utf8") as string);
-  console.log(`tasks: ${selected.length}/${tasks.length} valid, all samples exist`);
+  const v1 = selected.filter((t) => t.set === "v1").length;
+  const v2 = selected.filter((t) => t.set === "v2").length;
+  console.log(
+    `tasks: ${selected.length}/${tasks.length} valid (set=${options.set}: v1=${v1} v2=${v2}), all samples exist`,
+  );
   for (const task of selected) {
-    console.log(`  ok ${task.id} (${task.sample})`);
+    console.log(`  ok [${task.set}] ${task.id} (${task.sample})`);
   }
   if (!existsSync(SERVER_ENTRY)) {
     console.log(
@@ -252,11 +285,7 @@ function dryRun(only: string | undefined): void {
 
 async function realRun(options: Options): Promise<void> {
   const tasks = loadTasks();
-  const selected =
-    options.only === undefined ? tasks : tasks.filter((t) => t.id === options.only);
-  if (options.only !== undefined && selected.length === 0) {
-    throw new Error(`--only ${JSON.stringify(options.only)} matches no task`);
-  }
+  const selected = selectTasks(tasks, options);
   if (!existsSync(SERVER_ENTRY)) {
     throw new Error(
       `server build missing (${path.relative(ROOT, SERVER_ENTRY)}); build the mcp package first`,
@@ -275,16 +304,21 @@ async function realRun(options: Options): Promise<void> {
   const commit = shortCommit();
   const date = today();
   const summary = aggregate(outcomes, date, commit);
+  const bySet = aggregateBySet(outcomes, date, commit);
+  const sets = (["v1", "v2"] as const).filter((set) => bySet[set].total > 0);
   mkdirSync(RESULTS_DIR, { recursive: true });
   const jsonPath = path.join(RESULTS_DIR, `${date}-${commit}.json`);
-  writeFileSync(jsonPath, `${JSON.stringify({ summary, outcomes }, null, 2)}\n`);
+  writeFileSync(jsonPath, `${JSON.stringify({ summary, bySet, outcomes }, null, 2)}\n`);
   if (!existsSync(RESULTS_MD)) {
-    writeFileSync(RESULTS_MD, `# Eval results (M1.8)\n\n${RESULTS_HEADER}\n`);
+    writeFileSync(RESULTS_MD, `# Eval results (M1.8 / M2.6)\n\n${RESULTS_HEADER}\n`);
   }
-  appendFileSync(RESULTS_MD, `${formatResultsRow(summary)}\n`);
+  for (const set of sets) {
+    appendFileSync(RESULTS_MD, `${formatResultsRow(bySet[set])}\n`);
+  }
   console.log(
     `solved ${summary.solved}/${summary.total} (${summary.successPct.toFixed(1)}%), ` +
-      `median tool calls ${summary.medianToolCalls} -> ${jsonPath}`,
+      sets.map((set) => `${set} ${bySet[set].solved}/${bySet[set].total}`).join(", ") +
+      `, median tool calls ${summary.medianToolCalls} -> ${jsonPath}`,
   );
 }
 
@@ -292,12 +326,12 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (!("dryRun" in options)) {
     const narrow = options as { error: string };
-    console.error(`usage: run.ts [--dry-run] [--only <id>] [--concurrency N] [--timeout-ms N]\n${narrow.error}`);
+    console.error(`usage: run.ts [--dry-run] [--set v1|v2|all] [--only <id>] [--concurrency N] [--timeout-ms N]\n${narrow.error}`);
     process.exitCode = 1;
     return;
   }
   if (options.dryRun) {
-    dryRun(options.only);
+    dryRun(options);
     return;
   }
   await realRun(options);
