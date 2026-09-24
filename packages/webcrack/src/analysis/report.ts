@@ -144,7 +144,10 @@ function isGenericSecret(candidate: string): boolean {
   if (/^[0-9a-fA-F-]+$/.test(candidate)) return false;
   if (/^(sha\d+|md5)-/i.test(candidate)) return false;
   // Long pure-base64 blobs are almost always inlined assets, not keys.
-  if (candidate.length > LONG_BASE64_CUTOFF && /^[A-Za-z0-9+/=]+$/.test(candidate)) {
+  if (
+    candidate.length > LONG_BASE64_CUTOFF &&
+    /^[A-Za-z0-9+/=]+$/.test(candidate)
+  ) {
     return false;
   }
   if (!/[A-Za-z]/.test(candidate)) return false;
@@ -177,7 +180,8 @@ const SECRET_RULES: SecretRule[] = [
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const IPV4_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const IPV6_PATTERN = /\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b/g;
-const API_PATH_PATTERN = /\/api(?=$|[/\s"'`?#])(\/[\w\-._~:/?#[\]@!$&'()*+,;=%]*)?/g;
+const API_PATH_PATTERN =
+  /\/api(?=$|[/\s"'`?#])(\/[\w\-._~:/?#[\]@!$&'()*+,;=%]*)?/g;
 
 function validIpv4(ip: string): boolean {
   return ip.split('.').every((octet) => {
@@ -217,7 +221,9 @@ function isMember(
   return t.isMemberExpression(node) || t.isOptionalMemberExpression(node);
 }
 
-function propName(member: t.MemberExpression | t.OptionalMemberExpression): string | null {
+function propName(
+  member: t.MemberExpression | t.OptionalMemberExpression,
+): string | null {
   const prop = member.property;
   if (!member.computed && t.isIdentifier(prop)) return prop.name;
   if (t.isStringLiteral(prop)) return prop.value;
@@ -250,7 +256,7 @@ function endpointFromCall(
   isGlobal: (name: string) => boolean = () => true,
 ): EndpointEntry | null {
   const arg = (i: number): t.Node | null =>
-    i < args.length && !t.isSpreadElement(args[i]) ? (args[i]) : null;
+    i < args.length && !t.isSpreadElement(args[i]) ? args[i] : null;
 
   // fetch(url, { method })
   if (t.isIdentifier(callee) && callee.name === 'fetch') {
@@ -357,7 +363,10 @@ function endpointFromCall(
   return null;
 }
 
-function staticPropNode(obj: t.ObjectExpression, names: string[]): t.Node | null {
+function staticPropNode(
+  obj: t.ObjectExpression,
+  names: string[],
+): t.Node | null {
   for (const prop of obj.properties) {
     if (
       t.isObjectProperty(prop) &&
@@ -436,22 +445,26 @@ export function extractReport(ast: t.File): Report {
       }
     }
     if (!named && isGenericSecret(value)) {
-      pushUnique(report.secrets, seenSecrets, `generic-high-entropy\n${value}`, {
-        value,
-        rule: 'generic-high-entropy',
-        ...pos(node),
-      });
+      pushUnique(
+        report.secrets,
+        seenSecrets,
+        `generic-high-entropy\n${value}`,
+        {
+          value,
+          rule: 'generic-high-entropy',
+          ...pos(node),
+        },
+      );
     }
   };
 
   const addInteresting = (value: string, node: t.Node): void => {
     for (const match of value.matchAll(EMAIL_PATTERN)) {
-      pushUnique(
-        report.interesting,
-        seenInteresting,
-        `email\n${match[0]}`,
-        { value: match[0], kind: 'email', ...pos(node) },
-      );
+      pushUnique(report.interesting, seenInteresting, `email\n${match[0]}`, {
+        value: match[0],
+        kind: 'email',
+        ...pos(node),
+      });
     }
     for (const match of value.matchAll(IPV4_PATTERN)) {
       if (!validIpv4(match[0])) continue;

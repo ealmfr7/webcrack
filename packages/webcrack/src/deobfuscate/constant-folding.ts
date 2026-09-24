@@ -49,7 +49,8 @@ function isPure(node: t.Node | null | undefined): boolean {
   }
   if (t.isArrayExpression(node)) {
     return node.elements.every(
-      (element) => element !== null && !t.isSpreadElement(element) && isPure(element),
+      (element) =>
+        element !== null && !t.isSpreadElement(element) && isPure(element),
     );
   }
   if (t.isUnaryExpression(node)) {

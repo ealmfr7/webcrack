@@ -366,7 +366,11 @@ async function decodeRuns(
   );
   const runs = candidates.filter(
     ({ start, end }) =>
-      !hasUserBinding(container.scope, body.slice(start, end + 1), encodedPaths),
+      !hasUserBinding(
+        container.scope,
+        body.slice(start, end + 1),
+        encodedPaths,
+      ),
   );
   // Apply right to left: splicing a run only shifts the indices after it,
   // so earlier runs keep valid paths. Within a run the replacement keeps

@@ -234,11 +234,7 @@ function run(bc) {
   }
 }
 `);
-    expect(labels.map((l) => l.kind)).toEqual([
-      'push-const',
-      'binop',
-      'pop',
-    ]);
+    expect(labels.map((l) => l.kind)).toEqual(['push-const', 'binop', 'pop']);
   });
 
   test('confidences stay in range', () => {

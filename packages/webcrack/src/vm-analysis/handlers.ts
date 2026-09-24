@@ -327,8 +327,7 @@ function findPcAssigns(
   ) {
     return;
   }
-  const nested =
-    t.isLogicalExpression(expr) || t.isConditionalExpression(expr);
+  const nested = t.isLogicalExpression(expr) || t.isConditionalExpression(expr);
   for (const value of Object.values(expr)) {
     if (Array.isArray(value)) {
       for (const item of value) {
@@ -616,8 +615,7 @@ function classify(stmts: t.Statement[], names: Names): Classified {
     if (writes.every((w) => w.conditional)) {
       const [first] = writes;
       const unanimous = writes.every(
-        (w) =>
-          w.consequent === first.consequent && w.negated === first.negated,
+        (w) => w.consequent === first.consequent && w.negated === first.negated,
       );
       return {
         kind: 'cond-jump',

@@ -94,9 +94,9 @@ describe('generateWithMap', () => {
     expect(map.version).toBe(3);
     expect(map.sources).toContain('input.js');
     // No original code was provided, so no source content is embedded.
-    expect(
-      (map.sourcesContent ?? []).every((content) => content == null),
-    ).toBe(true);
+    expect((map.sourcesContent ?? []).every((content) => content == null)).toBe(
+      true,
+    );
     expect(decodeMappings(map.mappings).length).toBeGreaterThan(0);
   });
 
@@ -130,9 +130,7 @@ describe('generateWithMap', () => {
     expect(declaration.length).toBeGreaterThan(0);
     for (const m of declaration) {
       const line = code.split('\n')[m.generatedLine];
-      expect(line.slice(m.generatedColumn, m.generatedColumn + 3)).toBe(
-        'bar',
-      );
+      expect(line.slice(m.generatedColumn, m.generatedColumn + 3)).toBe('bar');
     }
 
     // `foo` reference was at line 2, column 12 in the input.
@@ -145,16 +143,12 @@ describe('generateWithMap', () => {
     expect(reference.length).toBeGreaterThan(0);
     for (const m of reference) {
       const line = code.split('\n')[m.generatedLine];
-      expect(line.slice(m.generatedColumn, m.generatedColumn + 3)).toBe(
-        'bar',
-      );
+      expect(line.slice(m.generatedColumn, m.generatedColumn + 3)).toBe('bar');
     }
   });
 
   test('generate() output is unchanged (no source map by default)', () => {
     const ast = parse('const answer = 40 + 2;\nconsole.log(answer);\n');
-    expect(generate(ast)).toBe(
-      'const answer = 40 + 2;\nconsole.log(answer);',
-    );
+    expect(generate(ast)).toBe('const answer = 40 + 2;\nconsole.log(answer);');
   });
 });

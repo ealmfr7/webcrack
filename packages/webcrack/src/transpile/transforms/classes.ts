@@ -90,7 +90,7 @@ function isNode(value: unknown): value is t.Node {
     typeof value === 'object' &&
     value !== null &&
     'type' in value &&
-    typeof (value).type === 'string'
+    typeof value.type === 'string'
   );
 }
 
@@ -133,7 +133,9 @@ type PlainFunction =
   | t.FunctionExpression
   | t.ArrowFunctionExpression;
 
-function asPlainFunction(node: t.Node | null | undefined): PlainFunction | null {
+function asPlainFunction(
+  node: t.Node | null | undefined,
+): PlainFunction | null {
   if (
     t.isFunctionDeclaration(node) ||
     t.isFunctionExpression(node) ||
@@ -156,9 +158,7 @@ function fnParams(fn: PlainFunction): string[] | null {
 }
 
 // Unwraps `(0, X.default)(...)` / `X.default(...)` / `X(...)` to `X`.
-function getCalleeName(
-  callee: t.Node | null | undefined,
-): string | null {
+function getCalleeName(callee: t.Node | null | undefined): string | null {
   if (!callee) return null;
   if (t.isIdentifier(callee)) return callee.name;
   if (
@@ -215,10 +215,7 @@ function runtimeHelperKind(source: string): HelperKind | null {
   return RUNTIME_HELPERS[base.replace(/\.js$/, '')] ?? null;
 }
 
-function returnsName(
-  arg: t.Node | null | undefined,
-  name: string,
-): boolean {
+function returnsName(arg: t.Node | null | undefined, name: string): boolean {
   if (!arg) return false;
   if (t.isIdentifier(arg, { name })) return true;
   if (t.isSequenceExpression(arg)) {
@@ -255,10 +252,7 @@ function throwsHelperError(fn: PlainFunction): boolean {
   return throwsNewError(fn, ['TypeError', 'ReferenceError']);
 }
 
-function callsNamed(
-  fn: PlainFunction,
-  names: Set<string>,
-): boolean {
+function callsNamed(fn: PlainFunction, names: Set<string>): boolean {
   if (names.size === 0) return false;
   let found = false;
   walkNodes(
@@ -356,15 +350,19 @@ function isClassCallCheckFn(fn: PlainFunction): boolean {
       const names = [inner.left.name, inner.right.name];
       if (!names.includes(a) || !names.includes(b)) return;
       let throws = false;
-      walkNodes(node.consequent, (child) => {
-        if (
-          t.isThrowStatement(child) &&
-          t.isNewExpression(child.argument) &&
-          t.isIdentifier(child.argument.callee, { name: 'TypeError' })
-        ) {
-          throws = true;
-        }
-      }, false);
+      walkNodes(
+        node.consequent,
+        (child) => {
+          if (
+            t.isThrowStatement(child) &&
+            t.isNewExpression(child.argument) &&
+            t.isIdentifier(child.argument.callee, { name: 'TypeError' })
+          ) {
+            throws = true;
+          }
+        },
+        false,
+      );
       if (throws) found = true;
     },
     true,
@@ -471,9 +469,13 @@ function isPossibleConstructorReturnFn(fn: PlainFunction): boolean {
         returned = true;
       } else if (t.isCallExpression(arg)) {
         let usesSelf = false;
-        walkNodes(arg, (child) => {
-          if (t.isIdentifier(child, { name: self })) usesSelf = true;
-        }, false);
+        walkNodes(
+          arg,
+          (child) => {
+            if (t.isIdentifier(child, { name: self })) usesSelf = true;
+          },
+          false,
+        );
         if (usesSelf) returned = true;
       }
     },
@@ -503,7 +505,10 @@ function isAssertThisInitializedFn(fn: PlainFunction): boolean {
   walkNodes(
     fn.body,
     (node) => {
-      if (t.isReturnStatement(node) && t.isIdentifier(node.argument, { name: self })) {
+      if (
+        t.isReturnStatement(node) &&
+        t.isIdentifier(node.argument, { name: self })
+      ) {
         returned = true;
       }
     },
@@ -853,21 +858,49 @@ function descriptorToMember(
   const { key, computed } = toClassKey(desc.key);
   if (desc.get) {
     if (!isStatic && keyName === 'constructor') return null;
-    return { key, computed, isStatic, kind: 'get', fn: desc.get, fieldValue: null };
+    return {
+      key,
+      computed,
+      isStatic,
+      kind: 'get',
+      fn: desc.get,
+      fieldValue: null,
+    };
   }
   if (desc.set) {
     if (!isStatic && keyName === 'constructor') return null;
-    return { key, computed, isStatic, kind: 'set', fn: desc.set, fieldValue: null };
+    return {
+      key,
+      computed,
+      isStatic,
+      kind: 'set',
+      fn: desc.set,
+      fieldValue: null,
+    };
   }
   if (desc.hasValue) {
     if (t.isFunctionExpression(desc.value)) {
       if (!isStatic && keyName === 'constructor' && desc.value) return null;
-      return { key, computed, isStatic, kind: 'method', fn: desc.value, fieldValue: null };
+      return {
+        key,
+        computed,
+        isStatic,
+        kind: 'method',
+        fn: desc.value,
+        fieldValue: null,
+      };
     }
     // Data values only convert safely as static fields; a prototype data
     // assignment evaluates once while an instance field evaluates per instance.
     if (!isStatic) return null;
-    return { key, computed, isStatic, kind: 'field', fn: null, fieldValue: desc.value };
+    return {
+      key,
+      computed,
+      isStatic,
+      kind: 'field',
+      fn: null,
+      fieldValue: desc.value,
+    };
   }
   return null;
 }
@@ -946,8 +979,10 @@ function protoTargetInfo(
     } else if (
       t.isMemberExpression(callee) &&
       t.isIdentifier(callee.object, { name: 'Object' }) &&
-      ((!callee.computed && t.isIdentifier(callee.property, { name: 'getPrototypeOf' })) ||
-        (callee.computed && t.isStringLiteral(callee.property, { value: 'getPrototypeOf' })))
+      ((!callee.computed &&
+        t.isIdentifier(callee.property, { name: 'getPrototypeOf' })) ||
+        (callee.computed &&
+          t.isStringLiteral(callee.property, { value: 'getPrototypeOf' })))
     ) {
       // `Object.getPrototypeOf(...)`
     } else {
@@ -1075,8 +1110,7 @@ function scanCallExpression(
       // the invocation itself is one level further up.
       const calleeParent = path.parentPath;
       const outer =
-        calleeParent.isMemberExpression() &&
-        calleeParent.node.object === node
+        calleeParent.isMemberExpression() && calleeParent.node.object === node
           ? calleeParent.parentPath
           : null;
       if (
@@ -1307,7 +1341,10 @@ function scanMemberExpression(
     return;
   }
   let fromProto: boolean;
-  if (t.isIdentifier(node.object) && superNames(ctx).includes(node.object.name)) {
+  if (
+    t.isIdentifier(node.object) &&
+    superNames(ctx).includes(node.object.name)
+  ) {
     fromProto = false;
   } else if (
     t.isMemberExpression(node.object) &&
@@ -1328,7 +1365,13 @@ function scanMemberExpression(
   }
   if (crossesFunctionBoundary(path, ctx.container, true)) return;
   const { key, computed } = toClassKey(node.property);
-  scan.propAccesses.push({ top: path, key, computed, args: null, spreadArg: null });
+  scan.propAccesses.push({
+    top: path,
+    key,
+    computed,
+    args: null,
+    spreadArg: null,
+  });
 }
 
 function scanFunction(
@@ -1485,7 +1528,8 @@ function superCallArgs(sc: SuperCtorCall): SuperArgs | null {
   }
   if (prop === 'apply') {
     const spread = node.arguments[1];
-    if (spread && t.isExpression(spread)) return { kind: 'spread', expr: spread };
+    if (spread && t.isExpression(spread))
+      return { kind: 'spread', expr: spread };
     return null;
   }
   return null;
@@ -1534,7 +1578,10 @@ function analyzeClass(
 
   const initPath = declPath.get('init') as NodePath<t.CallExpression>;
   const calleePath = initPath.get('callee');
-  if (!calleePath.isFunctionExpression() && !calleePath.isArrowFunctionExpression()) {
+  if (
+    !calleePath.isFunctionExpression() &&
+    !calleePath.isArrowFunctionExpression()
+  ) {
     return null;
   }
   const fnNode = calleePath.node;
@@ -1548,9 +1595,7 @@ function analyzeClass(
   }
   if (initPath.node.arguments.length !== fnNode.params.length) return null;
   const iifeParam =
-    fnNode.params.length === 1
-      ? (fnNode.params[0] as t.Identifier).name
-      : null;
+    fnNode.params.length === 1 ? (fnNode.params[0] as t.Identifier).name : null;
 
   const fnPath = calleePath as NodePath<
     t.FunctionExpression | t.ArrowFunctionExpression
@@ -1576,10 +1621,7 @@ function analyzeClass(
 
   const members: MemberDesc[] = [];
   const staticByFn = new Map<t.FunctionExpression, boolean>();
-  const pushDesc = (
-    desc: ParsedDescriptor,
-    isStatic: boolean,
-  ): boolean => {
+  const pushDesc = (desc: ParsedDescriptor, isStatic: boolean): boolean => {
     const member = descriptorToMember(desc, isStatic);
     if (!member) return false;
     if (member.fn) {
@@ -1601,9 +1643,7 @@ function analyzeClass(
   let protoAlias: string | null = null;
   let createClassCount = 0;
 
-  const consumeCreateClass = (
-    call: t.CallExpression,
-  ): boolean => {
+  const consumeCreateClass = (call: t.CallExpression): boolean => {
     if (
       call.arguments.length < 1 ||
       call.arguments.length > 3 ||
@@ -1666,7 +1706,10 @@ function analyzeClass(
       ) {
         if (inheritsPath) return null;
         const superArg = expr.arguments[1];
-        if (iifeParam !== null && t.isIdentifier(superArg, { name: iifeParam })) {
+        if (
+          iifeParam !== null &&
+          t.isIdentifier(superArg, { name: iifeParam })
+        ) {
           const passed = initPath.node.arguments[0];
           if (!passed || !t.isExpression(passed)) return null;
           superclass = passed;
@@ -1678,17 +1721,14 @@ function analyzeClass(
           }
         }
         inheritsPath = stmt;
-        const argPath = (stmt.get('expression') as NodePath<t.CallExpression>).get(
-          'arguments',
-        )[1];
+        const argPath = (
+          stmt.get('expression') as NodePath<t.CallExpression>
+        ).get('arguments')[1];
         if (!argPath || !argPath.isExpression()) return null;
         inheritsArg = argPath;
         continue;
       }
-      if (
-        isHelperCall(expr, helpers.createClass) &&
-        consumeCreateClass(expr)
-      ) {
+      if (isHelperCall(expr, helpers.createClass) && consumeCreateClass(expr)) {
         continue;
       }
       if (
@@ -1740,23 +1780,18 @@ function analyzeClass(
     superId,
     superAlias: superAlias?.name ?? null,
     superAliasDecl: superAlias
-      ? (superAlias.declPath.node.declarations[0])
+      ? superAlias.declPath.node.declarations[0]
       : null,
     isStatic: false,
     inConstructor: true,
     container: ctorPath,
   };
 
-  const ctorScan = scanFunction(
-    ctorPath,
-    baseCtx,
-  );
+  const ctorScan = scanFunction(ctorPath, baseCtx);
 
   // `_classCallCheck(this, Foo)`: recognized helpers are dropped, anything
   // else shaped like a class check bails out (negative case).
-  const ctorStmts = (
-    ctorPath.get('body')
-  ).get('body');
+  const ctorStmts = ctorPath.get('body').get('body');
   const cccs: NodePath<t.ExpressionStatement>[] = [];
   for (const s of ctorStmts) {
     if (!s.isExpressionStatement()) continue;
@@ -1818,9 +1853,7 @@ function analyzeClass(
     } else if (parent.isReturnStatement()) {
       // `return super(...);`
     } else if (parent.isCallExpression()) {
-      if (
-        !ctorScan.pcrCalls.some((pc) => pc.call.node === parent.node)
-      ) {
+      if (!ctorScan.pcrCalls.some((pc) => pc.call.node === parent.node)) {
         return null;
       }
     } else {
@@ -1829,13 +1862,9 @@ function analyzeClass(
   }
   if (producingNames.size > 1) return null;
   const thisAlias =
-    producingNames.size === 1
-      ? ([...producingNames.keys()][0])
-      : null;
+    producingNames.size === 1 ? [...producingNames.keys()][0] : null;
 
-  const tBinding = thisAlias
-    ? ctorPath.scope.getOwnBinding(thisAlias)
-    : null;
+  const tBinding = thisAlias ? ctorPath.scope.getOwnBinding(thisAlias) : null;
   if (thisAlias && !tBinding) return null;
   if (tBinding) {
     if (tBinding.constantViolations.length > 1) return null;
@@ -1882,10 +1911,7 @@ function analyzeClass(
 
   if (superclass && ctorScan.superCalls.length === 0) return null;
   if (!superclass && ctorScan.superCalls.length > 0) return null;
-  if (
-    superAlias &&
-    !ctorScan.superCalls.some((sc) => sc.kind === 'classic')
-  ) {
+  if (superAlias && !ctorScan.superCalls.some((sc) => sc.kind === 'classic')) {
     return null;
   }
 
@@ -2027,7 +2053,8 @@ function replacePcrCall(
 
 function buildMember(desc: MemberDesc): t.ClassMethod | t.ClassProperty {
   const computed =
-    desc.computed || !(t.isIdentifier(desc.key) || t.isNumericLiteral(desc.key));
+    desc.computed ||
+    !(t.isIdentifier(desc.key) || t.isNumericLiteral(desc.key));
   if (desc.kind === 'field') {
     return t.classProperty(
       desc.key,
@@ -2067,7 +2094,10 @@ function buildClass(info: AnalyzedClass): void {
     if (top.isLogicalExpression()) {
       if (parent.isVariableDeclarator()) {
         const decl = parent.parentPath;
-        if (decl.isVariableDeclaration() && decl.node.declarations.length === 1) {
+        if (
+          decl.isVariableDeclaration() &&
+          decl.node.declarations.length === 1
+        ) {
           decl.replaceWith(t.expressionStatement(superCall));
         }
       } else if (
@@ -2085,7 +2115,10 @@ function buildClass(info: AnalyzedClass): void {
     } else if (top.isCallExpression()) {
       if (parent.isVariableDeclarator()) {
         const decl = parent.parentPath;
-        if (decl.isVariableDeclaration() && decl.node.declarations.length === 1) {
+        if (
+          decl.isVariableDeclaration() &&
+          decl.node.declarations.length === 1
+        ) {
           decl.replaceWith(t.expressionStatement(superCall));
         }
       } else if (
@@ -2108,7 +2141,8 @@ function buildClass(info: AnalyzedClass): void {
     const first = pc.call.node.arguments[0];
     const isThisLike =
       t.isThisExpression(first) ||
-      (info.thisAlias !== null && t.isIdentifier(first, { name: info.thisAlias }));
+      (info.thisAlias !== null &&
+        t.isIdentifier(first, { name: info.thisAlias }));
     if (!isThisLike) continue;
     if (pc.helper === 'ati') {
       replacePcrCall(pc.call, t.thisExpression());
@@ -2157,7 +2191,10 @@ function buildClass(info: AnalyzedClass): void {
     }
   }
 
-  for (const pa of [...info.ctorScan.propAccesses, ...info.methodPropAccesses]) {
+  for (const pa of [
+    ...info.ctorScan.propAccesses,
+    ...info.methodPropAccesses,
+  ]) {
     if (pa.top.removed) continue;
     pa.top.replaceWith(buildSuperMember(pa));
   }
@@ -2209,13 +2246,15 @@ function buildClass(info: AnalyzedClass): void {
       ),
     );
   } else {
-    info.declPath.get('init').replaceWith(
-      t.classExpression(
-        t.identifier(info.className),
-        info.superclass,
-        classBody,
-      ),
-    );
+    info.declPath
+      .get('init')
+      .replaceWith(
+        t.classExpression(
+          t.identifier(info.className),
+          info.superclass,
+          classBody,
+        ),
+      );
   }
 }
 
@@ -2287,10 +2326,7 @@ function removeDeadHelpers(
       ) {
         const imp = bpath.parentPath;
         bpath.remove();
-        if (
-          imp.isImportDeclaration() &&
-          imp.node.specifiers.length === 0
-        ) {
+        if (imp.isImportDeclaration() && imp.node.specifiers.length === 0) {
           imp.remove();
         }
         removed = true;

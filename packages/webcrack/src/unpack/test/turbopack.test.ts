@@ -53,9 +53,18 @@ describe('turbopack object-keyed chunk', async () => {
   });
 
   test('derives paths from the [project] keys', () => {
-    expect(bundle.modules.get('[project]/src/greet.js [app-client] (ecmascript)')!.path).toBe('./src/greet.js');
-    expect(bundle.modules.get('[project]/src/name.js [app-client] (ecmascript)')!.path).toBe('./src/name.js');
-    expect(bundle.modules.get('[project]/src/extra.js [app-client] (ecmascript)')!.path).toBe('./src/extra.js');
+    expect(
+      bundle.modules.get('[project]/src/greet.js [app-client] (ecmascript)')!
+        .path,
+    ).toBe('./src/greet.js');
+    expect(
+      bundle.modules.get('[project]/src/name.js [app-client] (ecmascript)')!
+        .path,
+    ).toBe('./src/name.js');
+    expect(
+      bundle.modules.get('[project]/src/extra.js [app-client] (ecmascript)')!
+        .path,
+    ).toBe('./src/extra.js');
   });
 
   test('rewrites require calls to resolved paths', () => {
@@ -65,7 +74,9 @@ describe('turbopack object-keyed chunk', async () => {
     // External requires keep their specifier
     expect(entry).toContain('require("node:fs")');
     // Cross-chunk ids are left untouched
-    const nameCode = bundle.modules.get('[project]/src/name.js [app-client] (ecmascript)')!.code;
+    const nameCode = bundle.modules.get(
+      '[project]/src/name.js [app-client] (ecmascript)',
+    )!.code;
     expect(nameCode).toContain('__turbopack_require__(99999)');
   });
 
@@ -144,7 +155,9 @@ test('turbopack single-context param with inner destructure', () => {
   `);
   expect(bundle?.type).toBe('turbopack');
   expect(bundle?.modules.size).toBe(2);
-  const entry = bundle!.modules.get('[project]/a.js [app-client] (ecmascript)')!;
+  const entry = bundle!.modules.get(
+    '[project]/a.js [app-client] (ecmascript)',
+  )!;
   expect(entry.path).toBe('./a.js');
   expect(entry.code).toContain('require("./b.js")');
   expect(entry.code).not.toContain('__turbopack_context__');

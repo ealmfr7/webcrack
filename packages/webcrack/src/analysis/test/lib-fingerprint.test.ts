@@ -51,7 +51,9 @@ describe('fingerprint', () => {
 
   test('comments and formatting are ignored', () => {
     expect(hashOf('function add(a, b) { return a + b; }')).toBe(
-      hashOf('// adds two numbers\nfunction add(a, b) {\n  return a + b; // sum\n}'),
+      hashOf(
+        '// adds two numbers\nfunction add(a, b) {\n  return a + b; // sum\n}',
+      ),
     );
   });
 
@@ -94,7 +96,9 @@ describe('fingerprint', () => {
 });
 
 describe('seed signatures', () => {
-  const signaturesDir = fileURLToPath(new URL('../signatures/', import.meta.url));
+  const signaturesDir = fileURLToPath(
+    new URL('../signatures/', import.meta.url),
+  );
   const generatedPath = join(signaturesDir, 'generated.ts');
 
   function signatureFiles(): string[] {
@@ -143,10 +147,7 @@ describe('seed signatures', () => {
     };
   }
 
-  function compareSignatures(
-    a: LibrarySignature,
-    b: LibrarySignature,
-  ): number {
+  function compareSignatures(a: LibrarySignature, b: LibrarySignature): number {
     const ka = JSON.stringify([a.library, a.path]);
     const kb = JSON.stringify([b.library, b.path]);
     return ka < kb ? -1 : 1;
@@ -298,7 +299,9 @@ describe('matchModules', () => {
     const matches = matchModules(bundle);
     expect(matches).toHaveLength(1);
     bundle.applyMappings(toMappings(matches));
-    expect(bundle.modules.get('7')?.path).toBe('node_modules/tiny-hash/crc32.js');
+    expect(bundle.modules.get('7')?.path).toBe(
+      'node_modules/tiny-hash/crc32.js',
+    );
     expect(bundle.modules.get('entry')?.path).toBe('./index.js');
   });
 });

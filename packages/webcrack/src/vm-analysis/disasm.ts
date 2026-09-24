@@ -52,7 +52,8 @@ export function disassemble(
   labels: HandlerLabel[],
   bytecode?: BytecodeInput,
 ): Disassembly {
-  const bytes = bytecode !== undefined ? fromInput(bytecode) : fromBinding(info);
+  const bytes =
+    bytecode !== undefined ? fromInput(bytecode) : fromBinding(info);
   const byValue = new Map<string | number, HandlerLabel>();
   for (const label of labels) {
     if (label.value !== null && !byValue.has(label.value)) {
@@ -67,11 +68,23 @@ export function disassemble(
     const opcode = bytes[pc++];
     const label = byValue.get(opcode);
     if (label === undefined) {
-      instructions.push({ offset, opcode, mnemonic: 'db', operands: [], unknown: true });
+      instructions.push({
+        offset,
+        opcode,
+        mnemonic: 'db',
+        operands: [],
+        unknown: true,
+      });
       continue;
     }
     if (label.kind === 'unknown') {
-      instructions.push({ offset, opcode, mnemonic: label.kind, operands: [], unknown: true });
+      instructions.push({
+        offset,
+        opcode,
+        mnemonic: label.kind,
+        operands: [],
+        unknown: true,
+      });
       continue;
     }
     const operands = bytes.slice(pc, pc + label.operands);
@@ -96,7 +109,9 @@ export function disassemble(
 }
 
 /** Render instructions as a text listing with `L_0000` jump labels. */
-export function formatDisassembly(instructions: DisassembledInstruction[]): string {
+export function formatDisassembly(
+  instructions: DisassembledInstruction[],
+): string {
   const targets = new Set<number>();
   for (const instruction of instructions) {
     if (instruction.target !== undefined) targets.add(instruction.target);
@@ -122,8 +137,7 @@ function formatInstruction(instruction: DisassembledInstruction): string {
     return `db ${value}`;
   }
   if (
-    (instruction.mnemonic === 'jump' ||
-      instruction.mnemonic === 'cond-jump') &&
+    (instruction.mnemonic === 'jump' || instruction.mnemonic === 'cond-jump') &&
     instruction.target !== undefined
   ) {
     return `${instruction.mnemonic} ${labelName(instruction.target)}`;

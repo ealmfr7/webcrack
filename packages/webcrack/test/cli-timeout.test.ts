@@ -24,16 +24,14 @@ describe('strict --llm-timeout parsing', () => {
   test.each(['10s', '', 'abc', 0, -5, 1.5])(
     'rejects --llm-timeout %p',
     (llmTimeout) => {
-      expect(
-        validateLLMFlags({ llmRenameCommand: 'cmd', llmTimeout }),
-      ).toBe(MESSAGE);
+      expect(validateLLMFlags({ llmRenameCommand: 'cmd', llmTimeout })).toBe(
+        MESSAGE,
+      );
       expect(
         validateLLMFlags({
           llmRenameCommand: 'cmd',
           llmTimeout:
-            typeof llmTimeout === 'string'
-              ? Number(llmTimeout)
-              : llmTimeout,
+            typeof llmTimeout === 'string' ? Number(llmTimeout) : llmTimeout,
         }),
       ).toBe(MESSAGE);
     },

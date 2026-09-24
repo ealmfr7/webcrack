@@ -57,19 +57,49 @@ describe('endpoints', () => {
       navigator.sendBeacon("https://api.example.com/events", data);
     `);
     expect(report.endpoints).toEqual([
-      { method: 'GET', url: 'https://api.example.com/users', line: 2, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/users', line: 3, column: 6 },
-      { method: 'GET', url: 'https://api.example.com/items', line: 4, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/items', line: 5, column: 6 },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/users',
+        line: 2,
+        column: 6,
+      },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/users',
+        line: 3,
+        column: 6,
+      },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/items',
+        line: 4,
+        column: 6,
+      },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/items',
+        line: 5,
+        column: 6,
+      },
       {
         method: 'DELETE',
         url: 'https://api.example.com/items/1',
         line: 6,
         column: 6,
       },
-      { method: 'GET', url: 'https://api.example.com/poll', line: 8, column: 6 },
+      {
+        method: 'GET',
+        url: 'https://api.example.com/poll',
+        line: 8,
+        column: 6,
+      },
       { method: 'POST', url: '/api/legacy', line: 9, column: 6 },
-      { method: 'POST', url: 'https://api.example.com/events', line: 10, column: 6 },
+      {
+        method: 'POST',
+        url: 'https://api.example.com/events',
+        line: 10,
+        column: 6,
+      },
     ]);
   });
 
@@ -151,7 +181,12 @@ describe('secrets', () => {
       const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     `);
     expect(report.secrets).toEqual([
-      { value: 'AKIAIOSFODNN7EXAMPLE', rule: 'aws-access-key', line: 2, column: 18 },
+      {
+        value: 'AKIAIOSFODNN7EXAMPLE',
+        rule: 'aws-access-key',
+        line: 2,
+        column: 18,
+      },
       {
         value: 'AIzaSyA-abcdefghijklmnopqrstuvwxy123456',
         rule: 'google-api-key',
@@ -177,7 +212,12 @@ describe('secrets', () => {
   test('generic high-entropy strings', () => {
     const report = reportOf(`const token = "xK9#mQ2$vL7@nP4!wR8zT5yU";`);
     expect(report.secrets).toEqual([
-      { value: 'xK9#mQ2$vL7@nP4!wR8zT5yU', rule: 'generic-high-entropy', line: 1, column: 14 },
+      {
+        value: 'xK9#mQ2$vL7@nP4!wR8zT5yU',
+        rule: 'generic-high-entropy',
+        line: 1,
+        column: 14,
+      },
     ]);
   });
 
@@ -235,12 +275,10 @@ describe('interesting', () => {
       { value: '/api/v1/users', kind: 'path', line: 5, column: 19 },
       { value: '/api/v2/items', kind: 'path', line: 6, column: 19 },
     ]);
-    expect(
-      report.interesting.some((e) => e.value.includes('999')),
-    ).toBe(false);
-    expect(
-      report.interesting.some((e) => e.value.includes('12:34')),
-    ).toBe(false);
+    expect(report.interesting.some((e) => e.value.includes('999'))).toBe(false);
+    expect(report.interesting.some((e) => e.value.includes('12:34'))).toBe(
+      false,
+    );
   });
 });
 

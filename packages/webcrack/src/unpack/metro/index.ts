@@ -46,9 +46,11 @@ function fallbackIndices(count: number):
       dependencyMap?: number;
     }
   | undefined {
-  if (count >= 7) return { require: 1, module: 4, exports: 5, dependencyMap: 6 };
+  if (count >= 7)
+    return { require: 1, module: 4, exports: 5, dependencyMap: 6 };
   if (count === 6) return { require: 1, module: 4, exports: 5 };
-  if (count === 5) return { require: 1, module: 2, exports: 3, dependencyMap: 4 };
+  if (count === 5)
+    return { require: 1, module: 2, exports: 3, dependencyMap: 4 };
   if (count === 4) return { require: 1, module: 2, exports: 3 };
   return undefined;
 }
@@ -72,33 +74,30 @@ function findDepMapUsage(
   }
 
   const byObject = new Map<string, Map<string, number>>();
-  traverse(
-    fn,
-    {
-      CallExpression(path) {
-        const { callee } = path.node;
-        const [firstArg] = path.node.arguments;
-        if (!t.isIdentifier(callee) || !t.isMemberExpression(firstArg)) return;
-        if (!paramNames.has(callee.name)) return;
-        const { object } = firstArg;
-        if (
-          !t.isIdentifier(object) ||
-          !paramNames.has(object.name) ||
-          object.name === callee.name
-        ) {
-          return;
-        }
-        if (dependencyIndex(firstArg.property) === undefined) return;
-        let callees = byObject.get(object.name);
-        if (!callees) {
-          callees = new Map();
-          byObject.set(object.name, callees);
-        }
-        callees.set(callee.name, (callees.get(callee.name) ?? 0) + 1);
-      },
-      noScope: true,
+  traverse(fn, {
+    CallExpression(path) {
+      const { callee } = path.node;
+      const [firstArg] = path.node.arguments;
+      if (!t.isIdentifier(callee) || !t.isMemberExpression(firstArg)) return;
+      if (!paramNames.has(callee.name)) return;
+      const { object } = firstArg;
+      if (
+        !t.isIdentifier(object) ||
+        !paramNames.has(object.name) ||
+        object.name === callee.name
+      ) {
+        return;
+      }
+      if (dependencyIndex(firstArg.property) === undefined) return;
+      let callees = byObject.get(object.name);
+      if (!callees) {
+        callees = new Map();
+        byObject.set(object.name, callees);
+      }
+      callees.set(callee.name, (callees.get(callee.name) ?? 0) + 1);
     },
-  );
+    noScope: true,
+  });
   if (byObject.size === 0) return undefined;
 
   // Prefer the object indexed through the require param; otherwise the most
@@ -144,27 +143,24 @@ function rewriteRequires(
   deps: (number | string)[],
 ): void {
   if (calleeNames.size === 0) return;
-  traverse(
-    fn,
-    {
-      CallExpression(path) {
-        const { callee } = path.node;
-        if (!t.isIdentifier(callee) || !calleeNames.has(callee.name)) return;
-        const [firstArg] = path.node.arguments;
-        if (!t.isMemberExpression(firstArg)) return;
-        if (!t.isIdentifier(firstArg.object, { name: depMapName })) return;
-        const index = dependencyIndex(firstArg.property);
-        if (index === undefined || index < 0 || index >= deps.length) return;
-        const depId = deps[index];
-        path.node.arguments = [
-          typeof depId === 'number'
-            ? t.numericLiteral(depId)
-            : t.stringLiteral(depId),
-        ];
-      },
-      noScope: true,
+  traverse(fn, {
+    CallExpression(path) {
+      const { callee } = path.node;
+      if (!t.isIdentifier(callee) || !calleeNames.has(callee.name)) return;
+      const [firstArg] = path.node.arguments;
+      if (!t.isMemberExpression(firstArg)) return;
+      if (!t.isIdentifier(firstArg.object, { name: depMapName })) return;
+      const index = dependencyIndex(firstArg.property);
+      if (index === undefined || index < 0 || index >= deps.length) return;
+      const depId = deps[index];
+      path.node.arguments = [
+        typeof depId === 'number'
+          ? t.numericLiteral(depId)
+          : t.stringLiteral(depId),
+      ];
     },
-  );
+    noScope: true,
+  });
 }
 
 function renameParam(
