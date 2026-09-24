@@ -3,7 +3,11 @@
   "compilerOptions": {
     "noEmit": true,
     "verbatimModuleSyntax": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "webcrack/analysis": ["../webcrack/src/analysis-entry.ts"],
+      "webcrack": ["../webcrack/src/index.ts"]
+    }
   },
-  "include": ["*.ts", "src", "test"]
+  "include": ["*.ts", "src", "test", "../webcrack/src/**/*.d.ts"]
 }

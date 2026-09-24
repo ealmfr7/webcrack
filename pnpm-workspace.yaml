@@ -10,3 +10,6 @@ patchedDependencies:
   vite-plugin-monaco-editor@1.1.0: patches/vite-plugin-monaco-editor@1.1.0.patch
 
 autoInstallPeers: true
+
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk@1.30.1'
