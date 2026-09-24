@@ -16,7 +16,7 @@ import {
   writeWorkspaceToCache,
 } from './cache';
 import { collectModuleAstFindings, precomputeModuleFindings } from './findings';
-import { buildIndex, indexModule, linkIndex } from './indexer';
+import { buildIndex, INDEX_VERSION, indexModule, linkIndex } from './indexer';
 import { loadSource } from './loader';
 import { tagModule } from './tags';
 import { detectTechniques } from './techniques';
@@ -118,6 +118,7 @@ function computeId(
     .update(code, 'utf8')
     .update(JSON.stringify(options), 'utf8')
     .update(version, 'utf8')
+    .update(`index:${INDEX_VERSION}`, 'utf8')
     .digest('hex')
     .slice(0, 8);
 }

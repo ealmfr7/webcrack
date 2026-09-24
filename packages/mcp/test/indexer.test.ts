@@ -41,6 +41,119 @@ describe('contract', () => {
 });
 
 describe('symbols', () => {
+  test('indexes named functions and methods at nested depths', () => {
+    const index = single(
+      'nested.js',
+      [
+        'function outer() {',
+        '  function inner() { function deep() {} }',
+        '  const arrow = () => {};',
+        '  let delayed;',
+        '  delayed = function (x) { return x; };',
+        '  const service = { run() {}, stop: function () {} };',
+        '  class Nested { method() {} }',
+        '  inner(); delayed(1); service.run();',
+        '}',
+      ].join('\n'),
+    );
+    expect(index.symbols.map((s) => s.name)).toEqual([
+      'outer',
+      'inner',
+      'deep',
+      'arrow',
+      'delayed',
+      'service.run',
+      'service.stop',
+      'Nested',
+      'Nested.method',
+    ]);
+    expect(index.symbols.find((s) => s.name === 'deep')?.scopeDepth).toBe(2);
+    expect(index.symbols.find((s) => s.name === 'delayed')).toMatchObject({
+      kind: 'function',
+      line: 5,
+      params: ['x'],
+    });
+    expect(
+      index.refs.some((r) => r.name === 'delayed' && r.defLine === 5),
+    ).toBe(true);
+  });
+
+  test('indexes property definitions with static dot and bracket names', () => {
+    const index = single(
+      'members.js',
+      [
+        'const Module = {};',
+        'function real(x) { return x; }',
+        'Module["send"] = function (x) { return fetch(x); };',
+        'Module.copy = real;',
+        'Module.send("/log");',
+      ].join('\n'),
+    );
+    expect(index.symbols.find((s) => s.name === 'Module.send')).toMatchObject({
+      kind: 'function',
+      params: ['x'],
+      namespaceMember: true,
+    });
+    expect(index.symbols.find((s) => s.name === 'Module.copy')?.aliasOf).toBe(
+      'real',
+    );
+    expect(index.calls.some((c) => c.callee === 'Module.send')).toBe(true);
+    expect(
+      index.refs.some((r) => r.name === 'Module.send' && r.kind === 'call'),
+    ).toBe(true);
+  });
+  test('indexes nested object methods and methods of assigned class expressions', () => {
+    const index = single(
+      'owners.js',
+      [
+        'function setup() {',
+        '  const api = { network: { send(url) { return fetch(url); } } };',
+        '  const Client = class { request(url) { return api.network.send(url); } };',
+        '  const Holder = {};',
+        '  Holder.Worker = class { run() {} };',
+        '}',
+      ].join('\n'),
+    );
+    expect(index.symbols.map((s) => s.name)).toContain('api.network.send');
+    expect(index.symbols.map((s) => s.name)).toContain('Client.request');
+    expect(index.symbols.map((s) => s.name)).toContain('Holder.Worker.run');
+  });
+  test('indexes classic IIFE bodies without treating nested locals as module symbols', () => {
+    for (const code of [
+      '(function(g) { function p6X(x) { return x; } p6X(g); })(player);',
+      '!function(g) { function p6X(x) { return x; } p6X(g); }(player);',
+      '((g) => { function p6X(x) { return x; } p6X(g); })(player);',
+    ]) {
+      const index = single('player.js', code);
+      expect(index.symbols.map((s) => s.name)).toEqual(['p6X']);
+      expect(index.calls.some((c) => c.callee === 'p6X')).toBe(true);
+      expect(index.refs.some((r) => r.name === 'p6X' && r.defLine === 1)).toBe(
+        true,
+      );
+    }
+  });
+
+  test('indexes declarations in successive IIFEs', () => {
+    const index = single(
+      'player.js',
+      '(function() { function first() {} first(); })();\n' +
+        '(function() { function second() {} second(); })();',
+    );
+    expect(index.symbols.map((s) => s.name)).toEqual(['first', 'second']);
+    expect(index.refs.map((r) => r.name)).toEqual(['first', 'second']);
+  });
+
+  test('keeps same-named bindings in successive IIFEs distinct', () => {
+    const index = single(
+      'player.js',
+      '(function() { function run() {} run(); })();\n' +
+        '(function() { function run() {} run(); })();',
+    );
+    expect(
+      index.refs.filter((r) => r.name === 'run').map((r) => r.defLine),
+    ).toEqual([1, 2]);
+  });
+
   test('class with methods uses Class.method names', () => {
     const index = single(
       'src/client.js',
@@ -388,11 +501,12 @@ describe('cjs', () => {
       {
         module: 'src/c.js',
         name: 'run',
-        kind: 'variable',
+        kind: 'function',
         line: 3,
         endLine: 3,
         exported: true,
         refCount: 0,
+        params: [],
       },
       {
         module: 'src/c.js',
@@ -420,6 +534,22 @@ describe('cjs', () => {
     );
     expect(symbolsOf(index, 'src/d.js')).toMatchObject([
       { name: 'run', kind: 'function', exported: true },
+    ]);
+  });
+
+  test('deferred CommonJS exports preserve their function definition', () => {
+    const index = single(
+      'src/deferred.js',
+      'exports.run = undefined;\nexports.run = function (value) { return value; };\n',
+    );
+    expect(symbolsOf(index, 'src/deferred.js')).toMatchObject([
+      {
+        name: 'run',
+        kind: 'function',
+        line: 2,
+        params: ['value'],
+        exported: true,
+      },
     ]);
   });
 });

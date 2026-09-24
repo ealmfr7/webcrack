@@ -2,12 +2,15 @@ import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import type { NodePath } from '@babel/traverse';
 import type {
+  ArrowFunctionExpression,
+  BlockStatement,
   ClassBody,
   ClassDeclaration,
   ExportSpecifier,
   Expression,
   File,
   FunctionDeclaration,
+  FunctionExpression,
   Identifier,
   Node,
   VariableDeclaration,
@@ -20,8 +23,16 @@ import type {
   RefEntry,
   StringLiteralEntry,
   SymbolEntry,
+  SymbolScope,
   WorkspaceIndex,
 } from './types';
+
+/**
+ * Bump whenever the index built from the same code changes (new symbol
+ * kinds, scopes, ref rules). It is part of the workspace id, so caches
+ * written by an older indexer are rebuilt instead of served stale.
+ */
+export const INDEX_VERSION = '7';
 
 /**
  * Index one module's clean code (M1.2): re-parse it and extract the
@@ -86,7 +97,14 @@ export function linkIndex(parts: Map<string, ModuleIndex>): WorkspaceIndex {
     if (ref.defModule !== undefined) {
       // Resolved inside its own module: keep the local name.
       if (ref.defLine !== undefined) {
-        addCount(ref.defModule, ref.defLine, baseName(ref.name));
+        const exact = lookupName(lookups, ref.defModule, ref.name).some(
+          (sym) => sym.line === ref.defLine,
+        );
+        addCount(
+          ref.defModule,
+          ref.defLine,
+          exact ? ref.name : baseName(ref.name),
+        );
       }
       continue;
     }
@@ -181,6 +199,9 @@ interface WalkState {
   symbols: SymbolEntry[];
   /** First symbol wins; mirrors the linker's lookup. */
   byName: Map<string, SymbolEntry>;
+  /** Symbols identified by their actual binding, including separate IIFEs. */
+  byBinding: Map<string, SymbolEntry>;
+  memberSymbols: Map<string, SymbolEntry[]>;
   calls: CallSite[];
   strings: StringLiteralEntry[];
   refs: RefEntry[];
@@ -189,6 +210,12 @@ interface WalkState {
   reexports: ModuleIndex['reexports'];
   /** Local names bound by imports (ESM + CJS require). */
   importNames: Set<string>;
+  /** Wrapper function being collected (see `SymbolEntry.scope`). */
+  scope?: SymbolScope;
+  /** Parameters of the current wrapper, such as YouTube's namespace `g`. */
+  namespaceRoots?: Set<string>;
+  /** `var x;` symbols a later `x = function …` may turn into a definition. */
+  uninitialized: Set<SymbolEntry>;
 }
 
 function walkModule(
@@ -201,6 +228,8 @@ function walkModule(
     paths,
     symbols: [],
     byName: new Map(),
+    byBinding: new Map(),
+    memberSymbols: new Map(),
     calls: [],
     strings: [],
     refs: [],
@@ -208,8 +237,27 @@ function walkModule(
     importSeen: new Set(),
     reexports: [],
     importNames: new Set(),
+    uninitialized: new Set(),
   };
   collectTopLevel(state, ast.program.body);
+  collectAssignedDefinitions(state, ast.program.body);
+  // Classic bundles often put all useful declarations in an immediately
+  // invoked function. Its bindings are local to that function, but are the
+  // effective module-level symbols for navigation and tracing.
+  for (const node of ast.program.body) {
+    for (const fn of wrapperFunctions(node)) {
+      const line = lineOf(fn);
+      const endLine = endLineOf(fn);
+      if (line === undefined || endLine === undefined) continue;
+      state.scope = { line, endLine };
+      state.namespaceRoots = new Set(paramNames(fn.params));
+      collectTopLevel(state, fn.body.body);
+      collectAssignedDefinitions(state, fn.body.body);
+      state.scope = undefined;
+      state.namespaceRoots = undefined;
+    }
+  }
+  collectDeepDefinitions(state, ast);
   try {
     collectUsages(state, ast);
   } catch {
@@ -255,8 +303,18 @@ function addImport(
 }
 
 function addSymbol(state: WalkState, sym: SymbolEntry): void {
+  if (state.scope !== undefined) sym.scope = state.scope;
+  if (sym.scope !== undefined && sym.scopeDepth === undefined) {
+    sym.scopeDepth = 1;
+  }
   state.symbols.push(sym);
   if (!state.byName.has(sym.name)) state.byName.set(sym.name, sym);
+  state.byBinding.set(`${sym.name}\0${sym.line}`, sym);
+  if (sym.name.includes('.')) {
+    const members = state.memberSymbols.get(sym.name) ?? [];
+    members.push(sym);
+    state.memberSymbols.set(sym.name, members);
+  }
 }
 
 /** Mark the first top-level symbol with `name` exported (a no-op if absent). */
@@ -408,6 +466,380 @@ function paramNames(params: Node[]): string[] {
 }
 
 type BodyNode = File['program']['body'][number];
+
+type WrapperFunction = (FunctionExpression | ArrowFunctionExpression) & {
+  body: BlockStatement;
+};
+
+function asWrapperFunction(node: Node): WrapperFunction | undefined {
+  while (node.type === 'ParenthesizedExpression') node = node.expression;
+  if (
+    (node.type === 'FunctionExpression' ||
+      node.type === 'ArrowFunctionExpression') &&
+    node.body.type === 'BlockStatement'
+  ) {
+    return node as WrapperFunction;
+  }
+  return undefined;
+}
+
+/**
+ * Functions a top-level statement invokes immediately: the IIFE itself
+ * (`(function(g){…})(x)`, `!function(){…}()`, `(function(){…}).call(this)`)
+ * and UMD factories passed to it (`!function(e,t){…}(this, function(){…})`).
+ */
+function wrapperFunctions(node: BodyNode): WrapperFunction[] {
+  if (node.type !== 'ExpressionStatement') return [];
+  let expr: Node = node.expression;
+  while (
+    expr.type === 'UnaryExpression' ||
+    expr.type === 'ParenthesizedExpression'
+  ) {
+    expr = expr.type === 'UnaryExpression' ? expr.argument : expr.expression;
+  }
+  if (expr.type !== 'CallExpression') return [];
+  let callee: Node = expr.callee;
+  while (callee.type === 'ParenthesizedExpression') callee = callee.expression;
+  if (
+    callee.type === 'MemberExpression' &&
+    !callee.computed &&
+    callee.property.type === 'Identifier' &&
+    (callee.property.name === 'call' || callee.property.name === 'apply')
+  ) {
+    callee = callee.object;
+  }
+  const invoked = asWrapperFunction(callee);
+  if (invoked === undefined) return [];
+  const found = [invoked];
+  for (const arg of expr.arguments) {
+    const factory = asWrapperFunction(arg);
+    if (factory !== undefined) found.push(factory);
+  }
+  return found;
+}
+
+/** Named definitions at every function depth, independent of bundle shape. */
+function collectDeepDefinitions(state: WalkState, ast: File): void {
+  const keyOf = (sym: SymbolEntry): string =>
+    `${sym.name}\0${sym.line}\0${sym.scope?.line ?? 0}`;
+  const known = new Set(state.symbols.map(keyOf));
+  const scopeOf = (
+    path: NodePath,
+  ): { scope?: SymbolScope; depth: number; fn?: NodePath } => {
+    let depth = 0;
+    let fn: NodePath | undefined;
+    let parent = path.parentPath;
+    while (parent !== null) {
+      if (parent.isFunction()) {
+        depth++;
+        fn ??= parent;
+      }
+      parent = parent.parentPath;
+    }
+    const loc = fn?.node.loc;
+    return {
+      depth,
+      fn,
+      scope: loc ? { line: loc.start.line, endLine: loc.end.line } : undefined,
+    };
+  };
+  const add = (
+    path: NodePath,
+    name: string,
+    kind: SymbolEntry['kind'],
+    node: Node,
+    params?: string[],
+  ): SymbolEntry | undefined => {
+    const line = lineOf(node);
+    const endLine = endLineOf(node);
+    if (line === undefined || endLine === undefined) return undefined;
+    const { scope, depth } = scopeOf(path);
+    const sym: SymbolEntry = {
+      module: state.module,
+      name,
+      kind,
+      line,
+      endLine,
+      exported: false,
+      refCount: 0,
+      ...(params === undefined ? {} : { params }),
+      ...(scope === undefined ? {} : { scope, scopeDepth: depth }),
+    };
+    const key = keyOf(sym);
+    if (known.has(key)) return undefined;
+    known.add(key);
+    addSymbol(state, sym);
+    return sym;
+  };
+  const memberName = (node: Node): string | undefined => {
+    if (node.type === 'Identifier') return node.name;
+    if (node.type === 'ThisExpression') return 'this';
+    if (node.type !== 'MemberExpression') return undefined;
+    const owner = memberName(node.object);
+    const property =
+      node.computed && node.property.type === 'StringLiteral'
+        ? node.property.value
+        : staticKey(node.property, node.computed);
+    return owner && property ? `${owner}.${property}` : undefined;
+  };
+  const objectOwner = (object: NodePath): string | undefined => {
+    const parent = object.parentPath;
+    if (parent === null) return undefined;
+    if (parent.isVariableDeclarator() && parent.node.id.type === 'Identifier') {
+      return parent.node.id.name;
+    }
+    if (parent.isAssignmentExpression()) return memberName(parent.node.left);
+    if (parent.isObjectProperty()) {
+      const owner = objectOwner(parent.parentPath);
+      const property = staticKey(parent.node.key, parent.node.computed);
+      return owner && property ? `${owner}.${property}` : undefined;
+    }
+    return undefined;
+  };
+  const classOwner = (klass: NodePath): string | undefined => {
+    if (!klass.isClassDeclaration() && !klass.isClassExpression())
+      return undefined;
+    if (klass.node.id?.name) return klass.node.id.name;
+    const parent = klass.parentPath;
+    if (
+      parent?.isVariableDeclarator() &&
+      parent.node.id.type === 'Identifier'
+    ) {
+      return parent.node.id.name;
+    }
+    if (parent?.isAssignmentExpression()) return memberName(parent.node.left);
+    return undefined;
+  };
+
+  traverse(ast, {
+    FunctionDeclaration(path) {
+      if (path.node.id) {
+        add(
+          path,
+          path.node.id.name,
+          'function',
+          path.node,
+          paramNames(path.node.params),
+        );
+      }
+    },
+    ClassDeclaration(path) {
+      if (path.node.id) add(path, path.node.id.name, 'class', path.node);
+    },
+    VariableDeclarator(path) {
+      if (path.node.id.type !== 'Identifier') return;
+      const init = path.node.init;
+      if (
+        init?.type === 'FunctionExpression' ||
+        init?.type === 'ArrowFunctionExpression'
+      ) {
+        add(
+          path,
+          path.node.id.name,
+          'function',
+          path.node,
+          paramNames(init.params),
+        );
+      } else if (init?.type === 'ClassExpression') {
+        add(path, path.node.id.name, 'class', path.node);
+      }
+    },
+    AssignmentExpression(path) {
+      if (path.node.operator !== '=') return;
+      const value = path.node.right;
+      const kind: SymbolEntry['kind'] =
+        value.type === 'FunctionExpression' ||
+        value.type === 'ArrowFunctionExpression'
+          ? 'function'
+          : value.type === 'ClassExpression'
+            ? 'class'
+            : 'variable';
+      const params =
+        value.type === 'FunctionExpression' ||
+        value.type === 'ArrowFunctionExpression'
+          ? paramNames(value.params)
+          : undefined;
+      const left = path.node.left;
+      if (left.type === 'Identifier') {
+        if (kind === 'variable') return;
+        const binding = path.scope.getBinding(left.name);
+        if (binding === undefined) return;
+        const { fn } = scopeOf(path);
+        const bindingFn = binding.scope.path.isFunction()
+          ? binding.scope.path
+          : binding.scope.path.getFunctionParent();
+        if ((bindingFn?.node ?? undefined) !== (fn?.node ?? undefined)) return;
+        const declaration = lineOf(binding.identifier);
+        const previous = state.byBinding.get(`${left.name}\0${declaration}`);
+        if (previous?.kind === 'variable') {
+          previous.kind = kind;
+          previous.line = lineOf(path.node) ?? previous.line;
+          previous.endLine = endLineOf(path.node) ?? previous.endLine;
+          if (params !== undefined) previous.params = params;
+          known.add(keyOf(previous));
+          return;
+        }
+        const sym = add(path, left.name, kind, path.node, params);
+        if (sym !== undefined && declaration !== undefined) {
+          state.byBinding.set(`${left.name}\0${declaration}`, sym);
+        }
+        return;
+      }
+      if (left.type !== 'MemberExpression') return;
+      if (isExportsObject(left.object)) {
+        collectCjsExports(
+          state,
+          path.node,
+          lineOf(path.node),
+          endLineOf(path.node),
+        );
+        return;
+      }
+      // Only definitions are symbols: functions, classes and aliases
+      // (`g.X = otherFn`). Plain value writes (`this.x = 5`, `f.loading =
+      // true`) would swamp the index and make names ambiguous; the tracer
+      // finds property writes by itself.
+      if (kind === 'variable') {
+        // `obj.X = name` is an alias only when `name` is bound to a function
+        // or class; `this.data = param` is just a value write.
+        if (value.type !== 'Identifier') return;
+        const target = path.scope.getBinding(value.name)?.path;
+        const isCallable =
+          target !== undefined &&
+          (target.isFunctionDeclaration() ||
+            target.isClassDeclaration() ||
+            (target.isVariableDeclarator() &&
+              (target.node.init?.type === 'FunctionExpression' ||
+                target.node.init?.type === 'ArrowFunctionExpression' ||
+                target.node.init?.type === 'ClassExpression' ||
+                // `var f; … f = function` (assigned later): accept when the
+                // binding is ever assigned a function.
+                path.scope
+                  .getBinding(value.name)
+                  ?.constantViolations.some((v) => {
+                    const right = v.isAssignmentExpression()
+                      ? v.node.right.type
+                      : undefined;
+                    return (
+                      right === 'FunctionExpression' ||
+                      right === 'ArrowFunctionExpression' ||
+                      right === 'ClassExpression'
+                    );
+                  }))));
+        if (!isCallable) return;
+      }
+      const name = memberName(left);
+      if (name === undefined) return;
+      const sym = add(path, name, kind, path.node, params);
+      if (sym === undefined) return;
+      sym.namespaceMember = true;
+      if (value.type === 'Identifier') sym.aliasOf = value.name;
+      const root = name.split('.')[0];
+      const binding = path.scope.getBinding(root);
+      if (binding !== undefined) sym.ownerLine = lineOf(binding.identifier);
+    },
+    ObjectMethod(path) {
+      const owner = objectOwner(path.parentPath);
+      const property = staticKey(path.node.key, path.node.computed);
+      if (owner && property) {
+        add(
+          path,
+          `${owner}.${property}`,
+          'method',
+          path.node,
+          paramNames(path.node.params),
+        );
+      }
+    },
+    ObjectProperty(path) {
+      const owner = objectOwner(path.parentPath);
+      const property = staticKey(path.node.key, path.node.computed);
+      const value = path.node.value;
+      if (!owner || !property) return;
+      if (
+        value.type === 'FunctionExpression' ||
+        value.type === 'ArrowFunctionExpression'
+      ) {
+        add(
+          path,
+          `${owner}.${property}`,
+          'method',
+          path.node,
+          paramNames(value.params),
+        );
+      }
+    },
+    ClassMethod(path) {
+      const klass = path.parentPath?.parentPath;
+      const owner = klass ? classOwner(klass) : undefined;
+      const property = staticKey(path.node.key, path.node.computed);
+      if (owner && property) {
+        add(
+          path,
+          `${owner}.${property}`,
+          'method',
+          path.node,
+          paramNames(path.node.params),
+        );
+      }
+    },
+  });
+}
+
+/**
+ * Closure-style definitions: `var p6X;` declared up front and assigned later
+ * as `p6X = function (f) {…};` in the same body. The assignment is the real
+ * definition, so the symbol moves there (its binding key stays on the `var`
+ * line, which is where scope analysis puts the declaration).
+ */
+function collectAssignedDefinitions(state: WalkState, body: BodyNode[]): void {
+  if (state.uninitialized.size === 0) return;
+  const pending = new Map<string, SymbolEntry>();
+  for (const sym of state.uninitialized) {
+    if (sym.scope === state.scope && !pending.has(sym.name)) {
+      pending.set(sym.name, sym);
+    }
+  }
+  for (const node of body) {
+    if (pending.size === 0) return;
+    if (node.type !== 'ExpressionStatement') continue;
+    const expressions =
+      node.expression.type === 'SequenceExpression'
+        ? node.expression.expressions
+        : [node.expression];
+    for (const expr of expressions) {
+      if (
+        expr.type !== 'AssignmentExpression' ||
+        expr.operator !== '=' ||
+        expr.left.type !== 'Identifier'
+      ) {
+        continue;
+      }
+      const sym = pending.get(expr.left.name);
+      const value = expr.right;
+      if (sym === undefined) continue;
+      const line = lineOf(expr);
+      const endLine = endLineOf(expr);
+      if (line === undefined || endLine === undefined) continue;
+      if (
+        value.type === 'FunctionExpression' ||
+        value.type === 'ArrowFunctionExpression'
+      ) {
+        sym.kind = 'function';
+        sym.params = paramNames(value.params);
+      } else if (value.type === 'ClassExpression') {
+        sym.kind = 'class';
+        collectMethods(state, sym.name, value.body, sym.exported, line);
+      } else {
+        continue;
+      }
+      sym.line = line;
+      sym.endLine = endLine;
+      pending.delete(sym.name);
+      state.uninitialized.delete(sym);
+    }
+  }
+}
 
 function collectTopLevel(state: WalkState, body: BodyNode[]): void {
   for (const node of body) {
@@ -562,7 +994,72 @@ function collectStatement(state: WalkState, node: BodyNode): void {
       break;
     case 'ExpressionStatement':
       collectCjsExports(state, node.expression, lineOf(node), endLineOf(node));
+      collectNamespaceAssignments(state, node.expression);
       break;
+  }
+}
+
+/** Definitions assigned to a wrapper's namespace parameter (`g.X = …`). */
+function collectNamespaceAssignments(
+  state: WalkState,
+  expression: Expression,
+): void {
+  if (state.namespaceRoots === undefined) return;
+  const expressions =
+    expression.type === 'SequenceExpression'
+      ? expression.expressions
+      : [expression];
+  for (const expr of expressions) {
+    if (expr.type !== 'AssignmentExpression' || expr.operator !== '=') continue;
+    const left = expr.left;
+    if (left.type !== 'MemberExpression' || left.object.type !== 'Identifier')
+      continue;
+    if (!state.namespaceRoots.has(left.object.name)) continue;
+    const property =
+      left.computed && left.property.type === 'StringLiteral'
+        ? left.property.value
+        : staticKey(left.property, left.computed);
+    if (property === undefined) continue;
+    const value = expr.right;
+    if (
+      value.type !== 'FunctionExpression' &&
+      value.type !== 'ArrowFunctionExpression' &&
+      value.type !== 'ClassExpression' &&
+      value.type !== 'Identifier'
+    ) {
+      continue;
+    }
+    const line = lineOf(expr);
+    const endLine = endLineOf(expr);
+    if (line === undefined || endLine === undefined) continue;
+    const sym: SymbolEntry = {
+      module: state.module,
+      name: `${left.object.name}.${property}`,
+      kind:
+        value.type === 'FunctionExpression' ||
+        value.type === 'ArrowFunctionExpression'
+          ? 'function'
+          : value.type === 'ClassExpression'
+            ? 'class'
+            : 'variable',
+      line,
+      endLine,
+      exported: false,
+      refCount: 0,
+      namespaceMember: true,
+    };
+    if (
+      value.type === 'FunctionExpression' ||
+      value.type === 'ArrowFunctionExpression'
+    ) {
+      sym.params = paramNames(value.params);
+    } else if (value.type === 'Identifier') {
+      sym.aliasOf = value.name;
+    }
+    addSymbol(state, sym);
+    if (value.type === 'ClassExpression') {
+      collectMethods(state, sym.name, value.body, false, line);
+    }
   }
 }
 
@@ -671,7 +1168,7 @@ function collectDeclarator(
       });
       return;
     }
-    addSymbol(state, {
+    const sym: SymbolEntry = {
       module: state.module,
       name: id.name,
       kind: 'variable',
@@ -679,7 +1176,9 @@ function collectDeclarator(
       endLine,
       exported,
       refCount: 0,
-    });
+    };
+    addSymbol(state, sym);
+    if (init === null || init === undefined) state.uninitialized.add(sym);
     if (init?.type === 'ClassExpression') {
       collectMethods(state, id.name, init.body, exported, line);
     }
@@ -778,17 +1277,45 @@ function collectCjsExports(
   const existing = state.byName.get(name);
   if (existing) {
     existing.exported = true;
+    if (
+      expr.right.type === 'FunctionExpression' ||
+      expr.right.type === 'ArrowFunctionExpression'
+    ) {
+      existing.kind = 'function';
+      existing.params = paramNames(expr.right.params);
+      existing.line = line;
+      existing.endLine = endLine;
+    } else if (expr.right.type === 'ClassExpression') {
+      existing.kind = 'class';
+      existing.line = line;
+      existing.endLine = endLine;
+    } else if (expr.right.type === 'Identifier') {
+      existing.aliasOf = expr.right.name;
+    }
     return;
   }
-  addSymbol(state, {
+  const sym: SymbolEntry = {
     module: state.module,
     name,
-    kind: 'variable',
+    kind:
+      expr.right.type === 'FunctionExpression' ||
+      expr.right.type === 'ArrowFunctionExpression'
+        ? 'function'
+        : expr.right.type === 'ClassExpression'
+          ? 'class'
+          : 'variable',
     line,
     endLine,
     exported: true,
     refCount: 0,
-  });
+  };
+  if (
+    expr.right.type === 'FunctionExpression' ||
+    expr.right.type === 'ArrowFunctionExpression'
+  )
+    sym.params = paramNames(expr.right.params);
+  if (expr.right.type === 'Identifier') sym.aliasOf = expr.right.name;
+  addSymbol(state, sym);
 }
 
 function isExportsObject(node: Node): boolean {
@@ -903,6 +1430,22 @@ function collectUsages(state: WalkState, ast: File): void {
     if (props.length === 0) {
       // A bare name is statically known; only member roots get starred.
       name = root ?? '*';
+    } else if (
+      root !== undefined &&
+      state.memberSymbols.get(dotted(root, props))?.some((sym) => {
+        const binding = path.scope.getBinding(root);
+        return (
+          (sym.ownerLine === undefined ||
+            sym.ownerLine === lineOf(binding?.identifier)) &&
+          (sym.scope === undefined ||
+            (line >= sym.scope.line && line <= sym.scope.endLine)) &&
+          (sym.scope === undefined ||
+            sym.ownerLine !== undefined ||
+            lineOf(binding?.scope.path.node) === sym.scope.line)
+        );
+      })
+    ) {
+      name = dotted(root, props);
     } else if (root !== undefined && state.importNames.has(root)) {
       name = dotted(root, props);
     } else if (root === undefined) {
@@ -946,7 +1489,11 @@ function collectUsages(state: WalkState, ast: File): void {
   ): void => {
     const line = lineOf(path.node);
     if (line === undefined) return;
-    const local = state.byName.get(rootName);
+    const binding = path.scope.getBinding(rootName);
+    const local =
+      binding === undefined
+        ? undefined
+        : state.byBinding.get(`${rootName}\0${lineOf(binding.identifier)}`);
     if (local && local.kind !== 'import') {
       state.refs.push({
         module: state.module,
@@ -958,7 +1505,6 @@ function collectUsages(state: WalkState, ast: File): void {
       });
       return;
     }
-    const binding = path.scope.getBinding(rootName);
     if (
       !binding ||
       (binding.kind !== 'module' && !binding.scope.path.isProgram())
@@ -1127,6 +1673,9 @@ function collectUsages(state: WalkState, ast: File): void {
         return;
       }
 
+      const line = lineOf(node);
+      if (line === undefined) return;
+
       // Ascend a member chain whose object is this identifier: a chain on
       // an import root keeps the dotted name (`ns.sign`).
       let displayName = node.name;
@@ -1144,6 +1693,45 @@ function collectUsages(state: WalkState, ast: File): void {
       if (top !== node && state.importNames.has(node.name)) {
         const { root, props } = splitCallee(top);
         displayName = dotted(root, props);
+      }
+
+      // A member of an IIFE namespace parameter is a named definition in
+      // its own right. Match the parameter binding and wrapper scope so a
+      // shadowed `g` in a nested function cannot point at the outer member.
+      let member: SymbolEntry | undefined;
+      if (top !== node) {
+        const { root, props } = splitCallee(top);
+        const name = dotted(root, props);
+        const binding = path.scope.getBinding(node.name);
+        const candidates = state.memberSymbols.get(name) ?? [];
+        for (const candidate of candidates) {
+          const scope = candidate.scope;
+          if (
+            (candidate.ownerLine !== undefined &&
+              lineOf(binding?.identifier) !== candidate.ownerLine) ||
+            (scope !== undefined &&
+              (line < scope.line ||
+                line > scope.endLine ||
+                (candidate.ownerLine === undefined &&
+                  lineOf(binding?.scope.path.node) !== scope.line)))
+          )
+            continue;
+          if (
+            member === undefined ||
+            (scope?.endLine ?? Infinity) - (scope?.line ?? 0) <
+              (member.scope?.endLine ?? 0) - (member.scope?.line ?? 0)
+          )
+            member = candidate;
+        }
+        if (member !== undefined) {
+          displayName = member.name;
+          if (
+            line === member.line &&
+            owner?.node.type === 'AssignmentExpression' &&
+            owner.node.left === top
+          )
+            return;
+        }
       }
 
       // Only the binding itself (not a property of it) can be a write;
@@ -1192,10 +1780,23 @@ function collectUsages(state: WalkState, ast: File): void {
           topParent.tag === top
         ) {
           kind = 'call';
+        } else if (isWriteTarget(owner ?? null, top)) {
+          kind = 'write';
         }
       }
 
-      recordRef(path, node.name, displayName, kind);
+      if (member !== undefined) {
+        state.refs.push({
+          module: state.module,
+          line,
+          name: member.name,
+          defModule: state.module,
+          defLine: member.line,
+          kind,
+        });
+      } else {
+        recordRef(path, node.name, displayName, kind);
+      }
     },
   });
 }

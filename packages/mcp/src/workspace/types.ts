@@ -56,6 +56,14 @@ export interface SymbolEntry {
   line: number;
   endLine: number;
   params?: string[];
+  /** Local function/class name assigned to a namespace member. */
+  aliasOf?: string;
+  /** Member assigned through an IIFE namespace parameter (`g.X`). */
+  namespaceMember?: boolean;
+  /** Declaration line of the member expression's root binding, if known. */
+  ownerLine?: number;
+  /** Number of containing functions; used to keep the default outline short. */
+  scopeDepth?: number;
   /** Exports use the `exported` flag instead of a dedicated kind. */
   exported: boolean;
   /**
@@ -79,6 +87,19 @@ export interface SymbolEntry {
    * `from: 'src/sign.js'`).
    */
   from?: string;
+  /**
+   * For symbols declared inside a top-level wrapper function (IIFE, UMD
+   * factory) rather than the module scope: that function's line range. Two
+   * wrappers (or a wrapper and the module) may bind the same name, so this
+   * tells which one a `module:line` location sees. Absent at module scope.
+   */
+  scope?: SymbolScope;
+}
+
+/** 1-based inclusive line range of a wrapper function. */
+export interface SymbolScope {
+  line: number;
+  endLine: number;
 }
 
 /**

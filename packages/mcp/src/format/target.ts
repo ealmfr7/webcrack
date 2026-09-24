@@ -205,6 +205,62 @@ function locationModule(from: Location): string {
   return from.slice(0, from.lastIndexOf(':'));
 }
 
+/** Line part of a `module:line` location (undefined if not a number). */
+function locationLine(from: Location): number | undefined {
+  const line = Number(from.slice(from.lastIndexOf(':') + 1));
+  return Number.isInteger(line) && line > 0 ? line : undefined;
+}
+
+/** Whether `line` sees `sym`: module scope, or inside its wrapper function. */
+function inScope(sym: SymbolEntry, line: number): boolean {
+  return (
+    sym.scope === undefined ||
+    (line >= sym.scope.line && line <= sym.scope.endLine)
+  );
+}
+
+/** Wrapper-function span (smaller is more nested); module scope is widest. */
+function scopeSpan(sym: SymbolEntry): number {
+  return sym.scope === undefined
+    ? Number.POSITIVE_INFINITY
+    : sym.scope.endLine - sym.scope.line;
+}
+
+function scopeKey(sym: SymbolEntry): string {
+  return `${sym.module}\0${sym.scope?.line ?? 0}`;
+}
+
+/**
+ * Keep the first definition per (module, wrapper scope): redeclarations in
+ * one scope are one binding, while the same name in two wrappers (or a
+ * wrapper and the module) are different bindings.
+ */
+function distinctBindings(symbols: SymbolEntry[]): SymbolEntry[] {
+  const seen = new Map<string, SymbolEntry>();
+  for (const sym of symbols) {
+    if (!seen.has(scopeKey(sym))) seen.set(scopeKey(sym), sym);
+  }
+  return [...seen.values()];
+}
+
+/** `module:name`, or `module:name@line` when the module binds it twice. */
+function qualifyAll(symbols: SymbolEntry[]): string[] {
+  return symbols.map((sym) =>
+    symbols.some((o) => o !== sym && o.module === sym.module)
+      ? `${sym.module}:${sym.name}@${sym.line}`
+      : `${sym.module}:${sym.name}`,
+  );
+}
+
+function ambiguous(input: string, symbols: SymbolEntry[]): WcError {
+  const qualified = qualifyAll(symbols);
+  const where = new Set(symbols.map((s) => s.module)).size;
+  return new WcError(
+    `Ambiguous symbol "${input}": ${qualified.length} definitions${where > 1 ? ` in ${where} modules` : ''}. Qualify it as one of: ${qualified.map((q) => `\`${q}\``).join(', ')}, or pass \`from\` (module:line where the name is used).`,
+    qualified,
+  );
+}
+
 /**
  * Resolve a symbol reference (`name` or `module:name`) to its `SymbolEntry`.
  *
@@ -235,7 +291,9 @@ export function resolveSymbol(
   const colon = input.lastIndexOf(':');
   if (colon !== -1) {
     const entry = resolveModule(ws, input.slice(0, colon).trim());
-    const name = input.slice(colon + 1).trim();
+    const rest = input.slice(colon + 1).trim();
+    const at = /^(.+)@(\d+)$/.exec(rest);
+    const name = at ? at[1] : rest;
     const inModule = ws.index.symbols.filter(
       (s) => s.module === entry.path && s.name === name,
     );
@@ -249,6 +307,22 @@ export function resolveSymbol(
         candidates,
       );
     }
+    if (at) {
+      const line = Number(at[2]);
+      const exact = inModule.find((s) => s.line === line);
+      if (exact === undefined) {
+        const qualified = qualifyAll(inModule);
+        throw new WcError(
+          `No "${name}" defined at line ${line} of "${entry.path}". Definitions: ${qualified.map((q) => `\`${q}\``).join(', ')}.`,
+          qualified,
+        );
+      }
+      return exact;
+    }
+    const bindings = distinctBindings(
+      inModule.filter((s) => s.kind !== 'import'),
+    );
+    if (bindings.length > 1) throw ambiguous(input, bindings);
     const found = inModule[0];
     if (found.kind === 'import') {
       return resolveThroughImport(ws, entry.path, name) ?? found;
@@ -258,6 +332,11 @@ export function resolveSymbol(
 
   const matches = ws.index.symbols.filter((s) => s.name === input);
   if (matches.length === 0) {
+    const members = ws.index.symbols.filter(
+      (s) => s.namespaceMember === true && s.name.endsWith(`.${input}`),
+    );
+    if (members.length === 1) return members[0];
+    if (members.length > 1) throw ambiguous(input, members);
     const candidates = suggest(
       input,
       ws.index.symbols.map((s) => s.name),
@@ -274,8 +353,27 @@ export function resolveSymbol(
     );
     // A real definition in `from`'s module wins; an import binding alone
     // resolves through to its target (e.g. `s`, aliased from `sign`, at
-    // `src/api.js:5` is `src/sign.js:sign`, not the import line).
-    const defined = local.find((s) => s.kind !== 'import');
+    // `src/api.js:5` is `src/sign.js:sign`, not the import line). With
+    // several (wrapper functions binding the same name), the innermost one
+    // whose scope contains `from`'s line is the binding that line sees.
+    const fromLine = locationLine(from);
+    const visible = local.filter(
+      (s) =>
+        s.kind !== 'import' && (fromLine === undefined || inScope(s, fromLine)),
+    );
+    let defined: SymbolEntry | undefined;
+    for (const sym of visible) {
+      if (
+        defined === undefined ||
+        scopeSpan(sym) < scopeSpan(defined) ||
+        (scopeSpan(sym) === scopeSpan(defined) &&
+          fromLine !== undefined &&
+          sym.line <= fromLine &&
+          (defined.line > fromLine || sym.line > defined.line))
+      ) {
+        defined = sym;
+      }
+    }
     if (defined) return defined;
     const imported = resolveThroughImport(ws, fromModule, input);
     if (imported) return imported;
@@ -289,15 +387,9 @@ export function resolveSymbol(
     return only;
   }
 
-  const real = matches.filter((s) => s.kind !== 'import');
+  const real = distinctBindings(matches.filter((s) => s.kind !== 'import'));
   if (real.length === 1) return real[0];
-  if (real.length > 1) {
-    const qualified = real.map((s) => `${s.module}:${s.name}`);
-    throw new WcError(
-      `Ambiguous symbol "${input}": defined in ${qualified.length} modules. Qualify it as one of: ${qualified.map((q) => `\`${q}\``).join(', ')}.`,
-      qualified,
-    );
-  }
+  if (real.length > 1) throw ambiguous(input, real);
   // Only import bindings: follow each through its import and dedupe (e.g.
   // two modules re-exporting the same symbol collapse to one target).
   const followed = new Map<string, SymbolEntry>();

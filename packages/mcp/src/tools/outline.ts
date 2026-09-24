@@ -64,6 +64,10 @@ export const outline = defineTool({
       .describe(
         'concise groups imports on one line; full lists every symbol separately.',
       ),
+    includeNested: z
+      .boolean()
+      .default(false)
+      .describe('Include definitions inside nested functions and methods.'),
     ...pagination,
   },
   annotations: readOnly,
@@ -73,7 +77,10 @@ export const outline = defineTool({
     const detail = args.detail ?? 'concise';
     const limit = args.limit ?? 30;
     const offset = args.offset ?? 0;
-    const symbols = ws.index.symbols.filter((s) => s.module === entry.path);
+    const allSymbols = ws.index.symbols.filter((s) => s.module === entry.path);
+    const symbols = args.includeNested
+      ? allSymbols
+      : allSymbols.filter((s) => (s.scopeDepth ?? 0) <= 1);
     const page = paginate(symbols, limit, offset);
     const annotated = (s: SymbolEntry) =>
       findAnnotation(ws.annotations, s.module, s.name);
@@ -106,7 +113,10 @@ export const outline = defineTool({
     const plural = symbols.length === 1 ? 'symbol' : 'symbols';
     let body = `${entry.path} · ${symbols.length} ${plural} (${detail})`;
     if (lines.length > 0) body += `\n\`\`\`\n${lines.join('\n')}\n\`\`\``;
-    else body += '\nNo top-level symbols in this module.';
+    else body += '\nNo symbols at this depth in this module.';
+    if (!args.includeNested && allSymbols.length > symbols.length) {
+      body += `\n${allSymbols.length - symbols.length} nested definitions hidden; use includeNested=true to list them.`;
+    }
     if (page.footer) body += `\n${page.footer}`;
 
     const top = symbols.find((s) => s.kind !== 'import') ?? symbols[0];

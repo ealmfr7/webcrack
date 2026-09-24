@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { WcError } from '../format/errors';
 import { paginate, textResult } from '../format/response';
 import { resolveSymbol, symbolsByName } from '../format/target';
+import { approximateSymbolMatches } from '../workspace/approximate';
 import type { Location, Workspace } from '../workspace/types';
 import { defineTool, pagination, readOnly, workspaceArg } from './define';
 
@@ -23,11 +24,28 @@ export const refs = defineTool({
   annotations: readOnly,
   handler: (args, ctx) => {
     const ws = ctx.store.get(args.workspace);
-    const def = resolveSymbol(
-      ws,
-      args.symbol,
-      args.from as Location | undefined,
-    );
+    let def;
+    try {
+      def = resolveSymbol(ws, args.symbol, args.from as Location | undefined);
+    } catch (error) {
+      if (
+        !(error instanceof WcError) ||
+        !error.message.startsWith('Unknown symbol')
+      )
+        throw error;
+      const matches = approximateSymbolMatches(ws, args.symbol);
+      if (matches.length === 0) throw error;
+      const body = [
+        `Approximate matches for ${JSON.stringify(args.symbol)} (references are not resolved):`,
+        ...matches.map((m) => `${m.module}:${m.line}  ${m.kind}  ${m.code}`),
+      ].join('\n');
+      return Promise.resolve(
+        textResult(body, {
+          budget: ctx.config.outputBudget,
+          next: [`wc_read ${matches[0].module}:${matches[0].line}`],
+        }),
+      );
+    }
     const qualified = `${def.module}:${def.name}`;
     const lines: string[] = [];
     const next: string[] = [];
@@ -118,7 +136,17 @@ function findCallers(
   const rows: CallerRow[] = [];
   for (const ref of ws.index.refs) {
     if (ref.defModule !== def.module || ref.defLine !== def.line) continue;
-    if (lastSegment(ref.name) !== def.name && !isAliasRef(ws, ref, def))
+    if (
+      ref.name !== def.name &&
+      lastSegment(ref.name) !== def.name &&
+      !isAliasRef(ws, ref, def)
+    )
+      continue;
+    if (
+      ref.kind === 'write' &&
+      ref.module === def.module &&
+      ref.line === def.line
+    )
       continue;
     const call = ws.index.calls.find(
       (c) => c.module === ref.module && c.line === ref.line,

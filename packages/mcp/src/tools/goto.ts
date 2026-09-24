@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { WcError } from '../format/errors';
 import { numberLines, textResult } from '../format/response';
 import { resolveSymbol } from '../format/target';
+import { approximateSymbolMatches } from '../workspace/approximate';
 import type { Location } from '../workspace/types';
 import { defineTool, readOnly, workspaceArg } from './define';
 
@@ -17,11 +19,44 @@ export const goto = defineTool({
   annotations: readOnly,
   handler: (args, ctx) => {
     const ws = ctx.store.get(args.workspace);
-    const symbol = resolveSymbol(
-      ws,
-      args.symbol,
-      args.from as Location | undefined,
-    );
+    let selected;
+    try {
+      selected = resolveSymbol(
+        ws,
+        args.symbol,
+        args.from as Location | undefined,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof WcError) ||
+        !error.message.startsWith('Unknown symbol')
+      )
+        throw error;
+      const matches = approximateSymbolMatches(ws, args.symbol);
+      if (matches.length === 0) throw error;
+      const body = [
+        `Approximate matches for ${JSON.stringify(args.symbol)} (not a resolved definition):`,
+        ...matches.map((m) => `${m.module}:${m.line}  ${m.kind}  ${m.code}`),
+      ].join('\n');
+      return Promise.resolve(
+        textResult(body, {
+          budget: ctx.config.outputBudget,
+          next: [`wc_read ${matches[0].module}:${matches[0].line}`],
+        }),
+      );
+    }
+    let symbol = selected;
+    if (selected.aliasOf !== undefined) {
+      try {
+        symbol = resolveSymbol(
+          ws,
+          selected.aliasOf,
+          `${selected.module}:${selected.line}`,
+        );
+      } catch {
+        // Keep the assignment as the best known definition.
+      }
+    }
     const entry = ws.modules.get(symbol.module);
     const params =
       symbol.params !== undefined ? `(${symbol.params.join(', ')})` : '';
