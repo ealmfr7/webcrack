@@ -205,7 +205,8 @@ export function validateLLMFlags({
     if (
       typeof timeout !== 'number' ||
       !Number.isInteger(timeout) ||
-      timeout <= 0
+      timeout <= 0 ||
+      timeout > 2147483647
     ) {
       return '--llm-timeout must be a positive integer';
     }
