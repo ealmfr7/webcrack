@@ -329,7 +329,7 @@ pisarse:
       `view=raw` sobre el original por rango de líneas).
 - [x] **M1.6** `wc_search` con `text`, `regex`, `string`, `identifier`,
       `call`. (El modo `ast` va en M2.5.)
-- [ ] **M1.7** `wc_findings` (todas las categorías de §4) y `wc_goto`.
+- [x] **M1.7** `wc_findings` (todas las categorías de §4) y `wc_goto`.
       La lógica compartida de findings vive en `workspace/findings.ts`
       (la usan luego M1.3 para el overview y M3.1 para exportar).
 - [ ] **M1.8** Evaluación v1: `evals/tasks.jsonl` con ≥ 10 tareas sobre
