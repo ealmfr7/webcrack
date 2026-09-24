@@ -440,7 +440,16 @@ function collectFromAst(ws: Workspace, mod: ModuleEntry): Finding[] {
       ) {
         at('sinks', node, "addEventListener('message')");
       }
-      if (isStorageName(name)) at('storage', node, name);
+      // `document.cookie.*` calls are owned by the MemberExpression visitor
+      // (one `document.cookie` finding per line); the other roots report
+      // the full dotted callee here.
+      if (
+        name !== 'document.cookie' &&
+        !name.startsWith('document.cookie.') &&
+        isStorageName(name)
+      ) {
+        at('storage', node, name);
+      }
       const cryptoTitle = cryptoCallTitle(name);
       if (cryptoTitle !== undefined) at('crypto', node, cryptoTitle);
     },
@@ -450,15 +459,13 @@ function collectFromAst(ws: Workspace, mod: ModuleEntry): Finding[] {
     },
     MemberExpression(path) {
       const node = path.node;
-      // `document.cookie` reads/writes are property access, not calls.
+      // `document.cookie` reads/writes are property access, not calls. Fire
+      // on the exact name regardless of parent: chain reads like
+      // `document.cookie.split(';')` nest the match inside an outer member
+      // (whose dotted name never equals `document.cookie`), and the
+      // per-line `seen` dedupe keeps one finding per line.
       if (dotted(node) === 'document.cookie') {
-        const parent = path.parent;
-        if (
-          !t.isMemberExpression(parent) &&
-          !(t.isCallExpression(parent) && parent.callee === node)
-        ) {
-          at('storage', node, 'document.cookie');
-        }
+        at('storage', node, 'document.cookie');
       }
     },
     NumericLiteral(path) {

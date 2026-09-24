@@ -177,6 +177,22 @@ test('regexes, interesting and vm', async () => {
   expect(vm).toContain('VM interpreter (switch, 14 handlers)');
 });
 
+test('document.cookie chain reads are storage findings, once per line', () => {
+  const ws = fixtureWorkspace();
+  ws.modules.set('src/cookie.js', {
+    path: 'src/cookie.js',
+    bundleId: '2',
+    isEntry: false,
+    code: "const n = document.cookie.length;\nconst parts = document.cookie.split(';');",
+    tags: [],
+  });
+  const findings = collectFindings(ws, 'storage').filter(
+    (f) => f.module === 'src/cookie.js',
+  );
+  expect(findings.map((f) => f.line)).toEqual([1, 2]);
+  expect(findings.every((f) => f.title === 'document.cookie')).toBe(true);
+});
+
 test('summary counts and top 5', async () => {
   const { call } = await connect(fixtureWorkspace());
   const out = await call('wc_findings', { category: 'summary' });
