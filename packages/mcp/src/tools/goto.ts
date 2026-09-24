@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { notImplemented } from '../format/errors';
+import { numberLines, textResult } from '../format/response';
+import { resolveSymbol } from '../format/target';
+import type { Location } from '../workspace/types';
 import { defineTool, readOnly, workspaceArg } from './define';
 
 export const goto = defineTool({
@@ -13,5 +15,35 @@ export const goto = defineTool({
     from: z.string().optional().describe('module:line where the name appears.'),
   },
   annotations: readOnly,
-  handler: () => notImplemented('M1.7'),
+  handler: (args, ctx) => {
+    const ws = ctx.store.get(args.workspace);
+    const symbol = resolveSymbol(
+      ws,
+      args.symbol,
+      args.from as Location | undefined,
+    );
+    const entry = ws.modules.get(symbol.module);
+    const params =
+      symbol.params !== undefined ? `(${symbol.params.join(', ')})` : '';
+    const signature = `${symbol.kind} ${symbol.name}${params}`;
+    const refs = symbol.refCount === 1 ? '1 ref' : `${symbol.refCount} refs`;
+    const header =
+      `${symbol.module}:${symbol.line} · ${signature} · ` +
+      `${symbol.exported ? 'exported' : 'not exported'} · ${refs}`;
+    const lines = entry?.code.split('\n') ?? [];
+    const snippet = lines.slice(symbol.line - 1, symbol.line + 7).join('\n');
+    const body =
+      snippet.length > 0
+        ? `${header}\n\`\`\`js\n${numberLines(snippet, symbol.line)}\n\`\`\``
+        : header;
+    return Promise.resolve(
+      textResult(body, {
+        budget: ctx.config.outputBudget,
+        next: [
+          `wc_read ${symbol.module}:${symbol.name}`,
+          `wc_refs ${symbol.module}:${symbol.name}`,
+        ],
+      }),
+    );
+  },
 });
