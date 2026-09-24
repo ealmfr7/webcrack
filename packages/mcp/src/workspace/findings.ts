@@ -79,8 +79,12 @@ export const STORAGE_APIS: readonly string[] = [
   'document.cookie',
 ];
 
-/** Crypto call roots: exact `btoa`/`atob`, or anything under `crypto.subtle`. */
-export const CRYPTO_APIS: readonly string[] = ['crypto.subtle', 'btoa', 'atob'];
+/**
+ * Crypto call roots, shared with `workspace/tags.ts`. `btoa`/`atob` match
+ * exactly; `crypto` matches itself and anything under it (`crypto.subtle.*`,
+ * `crypto.getRandomValues`, …).
+ */
+export const CRYPTO_APIS: readonly string[] = ['crypto', 'btoa', 'atob'];
 
 /** Known hash/cipher numeric constants, matched against numeric literals. */
 export const CRYPTO_CONSTANTS: readonly {
@@ -305,11 +309,10 @@ function isStorageName(name: string): boolean {
 }
 
 function cryptoCallTitle(name: string): string | undefined {
-  if (name === 'btoa' || name === 'atob') return `${name}()`;
-  if (name === 'crypto.subtle' || name.startsWith('crypto.subtle.')) {
-    return `${name}()`;
-  }
-  return undefined;
+  const hit = CRYPTO_APIS.some(
+    (root) => name === root || name.startsWith(`${root}.`),
+  );
+  return hit ? `${name}()` : undefined;
 }
 
 function isStringArg(
