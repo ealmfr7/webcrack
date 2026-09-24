@@ -366,7 +366,7 @@ pisarse:
       `webcrack://<ws>/report` para clientes que prefieran adjuntar recursos.
 - [ ] **M3.4** `wc_trace value=…`: seguir el flujo de un valor (dónde se
       construye una URL/token y qué función lo envía) usando refs + asignaciones.
-- [ ] **M3.5** `wc_diff a b`: comparar dos workspaces (módulos cambiados por
+- [x] **M3.5** `wc_diff a b`: comparar dos workspaces (módulos cambiados por
       hash estructural, endpoints/secrets nuevos o eliminados).
 - [ ] **M3.6** Integración con el MCP `browser-api`: documentar y probar el
       flujo `browser_trace_source` → `wc_open source=<código|url>`.
