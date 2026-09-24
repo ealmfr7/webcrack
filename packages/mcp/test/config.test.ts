@@ -140,10 +140,33 @@ describe('WEBCRACK_MCP_ROOTS', () => {
   );
 });
 
+describe('WEBCRACK_MCP_TIMEOUT_MS', () => {
+  test.each(['2147483648', '9999999999', '9007199254740991'])(
+    'overflow value %j is rejected (would overflow setTimeout)',
+    (raw) => {
+      expect(() => loadConfig({ WEBCRACK_MCP_TIMEOUT_MS: raw })).toThrowError(
+        `Invalid WEBCRACK_MCP_TIMEOUT_MS="${raw}": expected a positive integer (milliseconds). Default: ${DEFAULT_TIMEOUT_MS}.`,
+      );
+    },
+  );
+
+  test('accepts the maximum 32-bit signed value', () => {
+    expect(
+      loadConfig({ WEBCRACK_MCP_TIMEOUT_MS: '2147483647' }).timeoutMs,
+    ).toBe(2147483647);
+  });
+});
+
 describe('WEBCRACK_MCP_CACHE', () => {
   test('uses the given directory', () => {
     expect(loadConfig({ WEBCRACK_MCP_CACHE: '/tmp/wc-cache' }).cacheDir).toBe(
-      '/tmp/wc-cache',
+      resolve('/tmp/wc-cache'),
+    );
+  });
+
+  test('resolves a relative directory against the cwd', () => {
+    expect(loadConfig({ WEBCRACK_MCP_CACHE: 'sub/cache' }).cacheDir).toBe(
+      resolve('sub/cache'),
     );
   });
 

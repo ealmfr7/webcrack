@@ -13,7 +13,7 @@ export default defineProject({
         ),
       },
       {
-        find: 'webcrack',
+        find: /^webcrack$/,
         replacement: path.resolve(
           import.meta.dirname,
           '../webcrack/src/index.ts',
