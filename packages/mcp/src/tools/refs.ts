@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WcError } from '../format/errors';
 import { paginate, textResult } from '../format/response';
 import { resolveSymbol, symbolsByName } from '../format/target';
 import type { Location, Workspace } from '../workspace/types';
@@ -139,8 +140,9 @@ function findCallees(
     if (call.line < def.line || call.line > def.endLine) continue;
     let resolved: string | undefined;
     // Pre-filter so big bundles are not O(calls×symbols): only resolve when
-    // the callee (or its last segment) names a known symbol. Any WcError
-    // (globals like `fetch`, `*.x`) means unresolved.
+    // the callee (or its last segment) names a known symbol. A WcError
+    // (globals like `fetch`, `*.x`) means unresolved; anything else is a
+    // real bug and must propagate instead of masking as unresolved.
     if (byName.has(call.callee) || byName.has(lastSegment(call.callee))) {
       try {
         const target = resolveSymbol(
@@ -149,7 +151,8 @@ function findCallees(
           `${call.module}:${call.line}`,
         );
         resolved = `${target.module}:${target.line}`;
-      } catch {
+      } catch (error) {
+        if (!(error instanceof WcError)) throw error;
         resolved = undefined;
       }
     }
