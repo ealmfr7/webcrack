@@ -1,6 +1,57 @@
 import { z } from 'zod';
-import { notImplemented } from '../format/errors';
-import { defineTool, readOnly, workspaceArg } from './define';
+import { paginate, textResult } from '../format/response';
+import { resolveModule } from '../format/target';
+import type { Annotation, SymbolEntry } from '../workspace/types';
+import { defineTool, pagination, readOnly, workspaceArg } from './define';
+
+function annotationFor(
+  annotations: Annotation[],
+  module: string,
+  name: string,
+): Annotation | undefined {
+  return annotations.find((a) => a.symbol === `${module}:${name}`);
+}
+
+function annotationSuffix(annotation: Annotation): string {
+  const parts: string[] = [];
+  if (annotation.rename) parts.push(`renamed to ${annotation.rename}`);
+  if (annotation.note) parts.push(`note: ${annotation.note}`);
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
+}
+
+/** `sign from src/sign.js`, or `s (sign from src/sign.js)` when aliased. */
+function describeImport(symbol: SymbolEntry): string {
+  const imported = symbol.importedName ?? symbol.name;
+  const from = symbol.from ?? '?';
+  return imported === symbol.name
+    ? `${symbol.name} from ${from}`
+    : `${symbol.name} (${imported} from ${from})`;
+}
+
+function formatSymbol(
+  symbol: SymbolEntry,
+  annotation: Annotation | undefined,
+): string {
+  const range =
+    symbol.line === symbol.endLine
+      ? `${symbol.line}`
+      : `${symbol.line}-${symbol.endLine}`;
+  let head: string;
+  if (symbol.kind === 'import') {
+    head = `${range} import ${describeImport(symbol)}`;
+  } else if (
+    symbol.kind === 'function' ||
+    symbol.kind === 'method' ||
+    symbol.kind === 'class'
+  ) {
+    head = `${range} ${symbol.kind} ${symbol.name}(${(symbol.params ?? []).join(', ')})`;
+  } else {
+    head = `${range} variable ${symbol.name}`;
+  }
+  const exported = symbol.exported ? ' [exported]' : '';
+  const suffix = annotation ? annotationSuffix(annotation) : '';
+  return `${head}${exported} · refs: ${symbol.refCount}${suffix}`;
+}
 
 export const outline = defineTool({
   name: 'wc_outline',
@@ -10,7 +61,63 @@ export const outline = defineTool({
   inputSchema: {
     workspace: workspaceArg,
     module: z.string().describe('Module path from wc_map, e.g. src/api.js.'),
+    detail: z
+      .enum(['concise', 'full'])
+      .default('concise')
+      .describe(
+        'concise groups imports on one line; full lists every symbol separately.',
+      ),
+    ...pagination,
   },
   annotations: readOnly,
-  handler: () => notImplemented('M1.5'),
+  handler: (args, ctx) => {
+    const ws = ctx.store.get(args.workspace);
+    const entry = resolveModule(ws, args.module);
+    const detail = args.detail ?? 'concise';
+    const limit = args.limit ?? 30;
+    const offset = args.offset ?? 0;
+    const symbols = ws.index.symbols.filter((s) => s.module === entry.path);
+    const page = paginate(symbols, limit, offset);
+    const annotated = (s: SymbolEntry) =>
+      annotationFor(ws.annotations, s.module, s.name);
+
+    const lines: string[] = [];
+    if (detail === 'full') {
+      for (const symbol of page.items) {
+        lines.push(formatSymbol(symbol, annotated(symbol)));
+      }
+    } else {
+      // Concise: plain imports collapse to one line. Imports carrying an
+      // annotation stay individual so their rename/note still shows.
+      const plain = page.items.filter(
+        (s) => s.kind === 'import' && !annotated(s),
+      );
+      let grouped = false;
+      for (const symbol of page.items) {
+        if (symbol.kind === 'import' && !annotated(symbol)) {
+          if (!grouped) {
+            grouped = true;
+            const items = plain.map(describeImport).join(', ');
+            lines.push(`${plain[0].line} imports (${plain.length}): ${items}`);
+          }
+          continue;
+        }
+        lines.push(formatSymbol(symbol, annotated(symbol)));
+      }
+    }
+
+    const plural = symbols.length === 1 ? 'symbol' : 'symbols';
+    let body = `${entry.path} · ${symbols.length} ${plural} (${detail})`;
+    if (lines.length > 0) body += `\n\`\`\`\n${lines.join('\n')}\n\`\`\``;
+    else body += '\nNo top-level symbols in this module.';
+    if (page.footer) body += `\n${page.footer}`;
+
+    const top = symbols.find((s) => s.kind !== 'import') ?? symbols[0];
+    const next = top
+      ? [`wc_read ${entry.path}:${top.name}`]
+      : [`wc_read ${entry.path}`];
+    return Promise.resolve(
+      textResult(body, { budget: ctx.config.outputBudget, next }),
+    );
+  },
 });
