@@ -115,7 +115,12 @@ program
 
     const code = await (files[0] ? readFile(files[0], 'utf8') : readStdin());
     const result = await webcrack(code, options);
-    if (suggestNames) await applyLLMRename(result, suggestNames);
+    if (suggestNames)
+      await applyLLMRename(
+        result,
+        suggestNames,
+        output ? undefined : { target: 'code' },
+      );
 
     if (output) {
       await result.save(output);
