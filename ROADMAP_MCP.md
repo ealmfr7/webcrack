@@ -308,7 +308,7 @@ pisarse:
 - [x] **M1.1** `workspace/loader.ts`: `path` (dentro de roots, error
       accionable si no), `url` (solo http/https, límite de tamaño, timeout,
       sin seguir a `file:`), `code` literal. Detección automática del tipo.
-- [ ] **M1.2** `workspace/indexer.ts` + `store.ts` (+ módulo de caché):
+- [x] **M1.2** `workspace/indexer.ts` + `store.ts` (+ módulo de caché):
       `store.open`/`listCached`/caché con el pipeline de `wc_open` completo
       (§3.3) y `onProgress` → notificaciones de progreso MCP. El store recibe
       `webcrack` inyectable (`deps`) para espiar sin `vi.mock`.
