@@ -96,9 +96,9 @@ function hasUnterminatedBlockComment(code: string): boolean {
  * `const`/`let` become `var` and top-level `class X` becomes
  * `var X = class X` for the same reason; only statements directly in
  * `Program.body` are rewritten, so `for (let …)` headers and block-level
- * declarations keep their semantics. Non-ESM (CJS/script) modules are not
- * rewritten. Returns `undefined` when the code has no ESM syntax or the
- * rewrite fails; callers splice the raw code.
+ * declarations keep their semantics. CJS/script modules get only that
+ * top-level binding rewrite. Returns `undefined` when the code needed no
+ * rewrite or the rewrite fails; callers splice the raw code.
  */
 function tryTranspileEsm(code: string): string | undefined {
   let ast: t.File;
@@ -201,12 +201,15 @@ function tryTranspileEsm(code: string): string | undefined {
         // Hoist non-exported top-level bindings out of the wrapper's `try`
         // so the expression can see them. Only direct Program.body
         // statements are touched; nested and block-level declarations
-        // (including `for (let …)` headers) are left alone. This does not
-        // mark the module as ESM, so non-ESM modules are still returned
-        // as-is when no other visitor fires.
+        // (including `for (let …)` headers) are left alone. A rewrite
+        // here counts as a change, so CJS/script modules get the
+        // rewritten code back even with no ESM syntax.
         for (const statementPath of path.get('body')) {
           if (statementPath.isVariableDeclaration()) {
-            statementPath.node.kind = 'var';
+            if (statementPath.node.kind !== 'var') {
+              statementPath.node.kind = 'var';
+              touched = true;
+            }
           } else if (statementPath.isClassDeclaration()) {
             const node = statementPath.node;
             const id = node.id;
@@ -222,6 +225,7 @@ function tryTranspileEsm(code: string): string | undefined {
                 ),
               ),
             );
+            touched = true;
           }
         }
       },
@@ -240,15 +244,36 @@ function tryTranspileEsm(code: string): string | undefined {
             ]);
             return;
           }
-          // Anonymous `export default function () {}` /
-          // `export default class {}`: a declaration with no id cannot be
-          // assigned, so convert it to an expression first.
-          path.replaceWith(
+          // Anonymous `export default function () {}`: keep it hoisted by
+          // emitting a function declaration under a reserved name, so
+          // earlier code can call it. Anonymous classes stay as
+          // expressions (classes aren't hoisted anyway). Both get the
+          // name "default".
+          if (t.isFunctionDeclaration(declaration)) {
+            const fn = t.functionDeclaration(
+              t.identifier('__wc_default'),
+              declaration.params,
+              declaration.body,
+              declaration.generator,
+              declaration.async,
+            );
+            path.replaceWithMultiple([
+              fn,
+              exportAssignment(
+                t.identifier('default'),
+                t.identifier('__wc_default'),
+              ),
+              defineNameStatement(t.identifier('__wc_default')),
+            ]);
+            return;
+          }
+          path.replaceWithMultiple([
             exportAssignment(
               t.identifier('default'),
               t.toExpression(declaration),
             ),
-          );
+            defineNameStatement(defaultExportAccess()),
+          ]);
           return;
         }
         path.replaceWith(
@@ -293,6 +318,36 @@ function stubBinding(name: string, init: t.Expression): t.VariableDeclaration {
 /** `__req('<source>')`, the stub import target (returns `{}`). */
 function requireCall(source: string): t.CallExpression {
   return t.callExpression(t.identifier('__req'), [t.stringLiteral(source)]);
+}
+
+/** `module.exports.default`, the default-export binding. */
+function defaultExportAccess(): t.MemberExpression {
+  return t.memberExpression(
+    t.memberExpression(t.identifier('module'), t.identifier('exports')),
+    t.identifier('default'),
+  );
+}
+
+/**
+ * `Object.defineProperty(<target>, 'name', { value: 'default' });` so an
+ * anonymous default export reports its name as "default".
+ */
+function defineNameStatement(target: t.Expression): t.ExpressionStatement {
+  return t.expressionStatement(
+    t.callExpression(
+      t.memberExpression(
+        t.identifier('Object'),
+        t.identifier('defineProperty'),
+      ),
+      [
+        target,
+        t.stringLiteral('name'),
+        t.objectExpression([
+          t.objectProperty(t.identifier('value'), t.stringLiteral('default')),
+        ]),
+      ],
+    ),
+  );
 }
 
 /** `module.exports.<exported> = <value>;` (string names need computed). */
