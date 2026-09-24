@@ -23,16 +23,16 @@ function defaultCacheDir(): string {
 }
 
 /**
- * Parse a strictly positive integer. Returns the default when the raw value
- * is missing or empty. Anything else that is not all digits (no signs, no
- * decimals, no suffixes) or that is zero throws an Error naming the variable.
- */
-/**
  * Maximum timeout in milliseconds: values above this overflow libuv/Node
  * `setTimeout` to about 1ms (2^31 - 1, the max signed 32-bit integer).
  */
 export const MAX_TIMEOUT_MS = 2147483647;
 
+/**
+ * Parse a strictly positive integer. Returns the default when the raw value
+ * is missing or empty. Anything else that is not all digits (no signs, no
+ * decimals, no suffixes) or that is zero throws an Error naming the variable.
+ */
 function parsePositiveInt(
   name: string,
   raw: string | undefined,
@@ -48,13 +48,14 @@ function parsePositiveInt(
     );
   }
   const value = Number(text);
-  if (
-    !Number.isSafeInteger(value) ||
-    value <= 0 ||
-    (max !== undefined && value > max)
-  ) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(
       `Invalid ${name}="${raw}": expected a positive integer (${unit}). Default: ${fallback}.`,
+    );
+  }
+  if (max !== undefined && value > max) {
+    throw new Error(
+      `Invalid ${name}="${raw}": expected a positive integer ≤ ${max} (${unit}). Default: ${fallback}.`,
     );
   }
   return value;
