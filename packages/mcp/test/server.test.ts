@@ -37,7 +37,10 @@ test('tool errors are returned as actionable tool results', async () => {
   })) as CallToolResult;
   expect(result.isError).toBe(true);
   expect(result.content).toEqual([
-    { type: 'text', text: expect.stringContaining('No workspace is open') as string },
+    {
+      type: 'text',
+      text: expect.stringContaining('No workspace is open') as string,
+    },
   ]);
 });
 
