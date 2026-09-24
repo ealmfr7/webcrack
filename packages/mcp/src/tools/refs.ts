@@ -101,9 +101,15 @@ function lastSegment(name: string): string {
 }
 
 /**
- * Refs whose `defModule`/`defLine` point at the definition and whose name
- * matches it — either exactly or as a namespace member (`ns.sign` refers to
- * the exported `sign`, keeping the dotted name after linking).
+ * Refs whose `defModule`/`defLine` point at the definition, so callers
+ * through an export alias (`export { renamedFn as sign }`: importers
+ * still call it `sign`, or `ns.sign`) keep resolving after a rename.
+ *
+ * A name check remains only to separate symbols declared on the same line
+ * (`const a = 1, b = 2` share one `defLine`): a ref is accepted when its
+ * last segment matches the def name, or when it is a cross-module ref
+ * whose last segment is an export alias of the def (a self-reexport
+ * `{ module: def.module, from: def.module, importedName: def.name }`).
  */
 function findCallers(
   ws: Workspace,
@@ -112,7 +118,8 @@ function findCallers(
   const rows: CallerRow[] = [];
   for (const ref of ws.index.refs) {
     if (ref.defModule !== def.module || ref.defLine !== def.line) continue;
-    if (lastSegment(ref.name) !== def.name) continue;
+    if (lastSegment(ref.name) !== def.name && !isAliasRef(ws, ref, def))
+      continue;
     const call = ws.index.calls.find(
       (c) => c.module === ref.module && c.line === ref.line,
     );
@@ -125,6 +132,27 @@ function findCallers(
     });
   }
   return rows;
+}
+
+/**
+ * A cross-module ref reaching the def through an export alias: the def's
+ * own module re-exports its local name under the ref's name
+ * (`export { renamedFn as sign }`).
+ */
+function isAliasRef(
+  ws: Workspace,
+  ref: { module: string; name: string },
+  def: { module: string; name: string },
+): boolean {
+  if (ref.module === def.module) return false;
+  const segment = lastSegment(ref.name);
+  return ws.index.reexports.some(
+    (re) =>
+      re.module === def.module &&
+      re.from === def.module &&
+      re.importedName === def.name &&
+      re.name === segment,
+  );
 }
 
 /** Calls inside the definition's own body (`module`, `caller`, line range). */

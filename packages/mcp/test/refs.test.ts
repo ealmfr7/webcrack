@@ -108,6 +108,36 @@ export function verify(v) {
   return ws;
 }
 
+/** Fixture rebuilt through the real indexer, plus a same-module caller of
+ * `sign` and a namespace-import module using `ns.sign(v)`. */
+function withRenameCallers(): Workspace {
+  const ws = fixtureWorkspace();
+  ws.modules.set('src/sign.js', {
+    path: 'src/sign.js',
+    bundleId: '1',
+    isEntry: false,
+    code: `export function sign(value) {
+  return btoa(value + "s3cr3t");
+}
+export function verifyLocal(v) {
+  return sign(v);
+}`,
+    tags: ['crypto'],
+  });
+  ws.modules.set('src/ns.js', {
+    path: 'src/ns.js',
+    bundleId: '2',
+    isEntry: false,
+    code: `import * as ns from "./sign.js";
+export function verify(v) {
+  return ns.sign(v);
+}`,
+    tags: [],
+  });
+  ws.index = buildIndex(ws.modules);
+  return ws;
+}
+
 describe('wc_refs callers', () => {
   test('bare sign resolves through the import to src/sign.js:1', async () => {
     const { call } = await connect(fixtureWorkspace());
@@ -150,6 +180,37 @@ describe('wc_refs callers', () => {
   test('unknown symbol suggests similar names', async () => {
     const { call } = await connect(fixtureWorkspace());
     await expect(call('wc_refs', { symbol: 'sgin' })).rejects.toThrow(/sign/);
+  });
+
+  test('same-line declarations do not share callers', async () => {
+    const ws = fixtureWorkspace();
+    ws.modules.set('src/consts.js', {
+      path: 'src/consts.js',
+      bundleId: '2',
+      isEntry: false,
+      code: `export const a = 1, b = 2;
+export function useA() {
+  return a;
+}
+export function useB() {
+  return b;
+}`,
+      tags: [],
+    });
+    ws.index = buildIndex(ws.modules);
+    const { call } = await connectReal(ws);
+
+    const textA = await call('wc_refs', { symbol: 'src/consts.js:a' });
+    expect(textA).toContain('1 caller');
+    expect(textA).toContain('src/consts.js:3  read');
+    expect(textA).toContain('return a;');
+    expect(textA).not.toContain('return b;');
+
+    const textB = await call('wc_refs', { symbol: 'src/consts.js:b' });
+    expect(textB).toContain('1 caller');
+    expect(textB).toContain('src/consts.js:6  read');
+    expect(textB).toContain('return b;');
+    expect(textB).not.toContain('return a;');
   });
 });
 
@@ -288,6 +349,30 @@ describe('wc_refs callees', () => {
       expect(callees).toContain('src/api.js:5  sign → src/sign.js:1');
       const read = await call('wc_read', { target: 'src/sign.js:renamedFn' });
       expect(read).toContain('function renamedFn');
+    });
+
+    test('renaming an exported fn keeps named, namespace, and same-module callers', async () => {
+      const ws = withRenameCallers();
+      const { call } = await connectReal(ws);
+
+      await call('wc_annotate', {
+        symbol: 'src/sign.js:sign',
+        name: 'renamedFn',
+      });
+
+      const text = await call('wc_refs', { symbol: 'renamedFn' });
+      expect(text).toContain(
+        '`renamedFn` defined at src/sign.js:1 (function, exported) — 4 callers',
+      );
+      expect(text).toContain('Callers of `renamedFn` (4):');
+      // Named import, still using the kept `sign` alias.
+      expect(text).toContain('src/api.js:5  call  in login');
+      // Namespace import, still `ns.sign(v)`.
+      expect(text).toContain('src/ns.js:3  call  in verify');
+      // Same-module caller, renamed to `renamedFn(v)`.
+      expect(text).toContain('src/sign.js:5  call  in verifyLocal');
+      // The kept export alias itself references the renamed binding.
+      expect(text).toContain('src/sign.js:7  read');
     });
   });
 
