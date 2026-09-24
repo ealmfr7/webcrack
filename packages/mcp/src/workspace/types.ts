@@ -216,10 +216,16 @@ export interface InterpreterSummary {
 }
 
 export interface Annotation {
-  /** `module:name` of the original binding. */
+  /** `module:name` of the current binding (re-keyed on every rename). */
   symbol: string;
   rename?: string;
   note?: string;
+  /**
+   * The binding's very first name, kept across renames so notes stay
+   * attached to the same entry. Set on the first rename, never changed
+   * afterwards; lookups match it as an old key.
+   */
+  originalName?: string;
 }
 
 /**

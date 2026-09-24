@@ -286,9 +286,9 @@ describe('wc_annotate', () => {
     const read = await call('wc_read', { target: 'sign.js:hmacSign' });
     expect(read).toContain('function hmacSign');
 
-    // The annotation is keyed by the original binding.
+    // The annotation is re-keyed to the new name, keeping the first name.
     expect(ws.annotations).toEqual([
-      { symbol: 'sign.js:sign', rename: 'hmacSign' },
+      { symbol: 'sign.js:hmacSign', rename: 'hmacSign', originalName: 'sign' },
     ]);
 
     // Only the changed module's report was recomputed (real extractReport).
@@ -391,11 +391,158 @@ describe('wc_annotate', () => {
     await call('wc_annotate', { symbol: 'sign.js:sign', name: 'hmacSign' });
     expect(ws.annotations).toEqual([
       {
-        symbol: 'sign.js:sign',
+        symbol: 'sign.js:hmacSign',
         rename: 'hmacSign',
+        originalName: 'sign',
         note: 'HMAC with a hardcoded pepper',
       },
     ]);
+  });
+
+  test('rename plus note shows the note on the new name', async () => {
+    const { call, ws, fake } = await setup(fixtureWorkspace());
+    fake.rename('sign.js', 'sign', 'hmacSign');
+
+    const text = await call('wc_annotate', {
+      symbol: 'sign.js:sign',
+      name: 'hmacSign',
+      note: 'HMAC with a hardcoded pepper',
+    });
+    expect(text).toContain('Renamed sign.js:sign → hmacSign');
+    expect(text).toContain('Note recorded on sign.js:hmacSign');
+    expect(ws.annotations).toEqual([
+      {
+        symbol: 'sign.js:hmacSign',
+        rename: 'hmacSign',
+        originalName: 'sign',
+        note: 'HMAC with a hardcoded pepper',
+      },
+    ]);
+
+    const outline = await call('wc_outline', { module: 'sign.js' });
+    expect(outline).toContain('function hmacSign(value)');
+    expect(outline).toContain('renamed to hmacSign');
+    expect(outline).toContain('HMAC with a hardcoded pepper');
+
+    const read = await call('wc_read', { target: 'sign.js:hmacSign' });
+    expect(read).toContain('function hmacSign');
+    expect(read).toContain(
+      'Note on hmacSign: renamed to hmacSign · HMAC with a hardcoded pepper',
+    );
+  });
+
+  test('a later note on the new name updates the same entry', async () => {
+    const { call, ws, fake } = await setup(fixtureWorkspace());
+    fake.rename('sign.js', 'sign', 'hmacSign');
+    await call('wc_annotate', {
+      symbol: 'sign.js:sign',
+      name: 'hmacSign',
+      note: 'HMAC with a hardcoded pepper',
+    });
+
+    const text = await call('wc_annotate', {
+      symbol: 'sign.js:hmacSign',
+      note: 'Uses SHA-256 instead',
+    });
+    expect(text).toContain('Note recorded on sign.js:hmacSign');
+    expect(ws.annotations).toEqual([
+      {
+        symbol: 'sign.js:hmacSign',
+        rename: 'hmacSign',
+        originalName: 'sign',
+        note: 'Uses SHA-256 instead',
+      },
+    ]);
+
+    const read = await call('wc_read', { target: 'sign.js:hmacSign' });
+    expect(read).toContain('Uses SHA-256 instead');
+    expect(read).not.toContain('HMAC with a hardcoded pepper');
+  });
+
+  test('a chained rename keeps a single entry on the latest name', async () => {
+    const { call, config, ws, fake } = await setup(fixtureWorkspace());
+    fake.rename('sign.js', 'sign', 'hmacSign');
+    await call('wc_annotate', {
+      symbol: 'sign.js:sign',
+      name: 'hmacSign',
+      note: 'HMAC with a hardcoded pepper',
+    });
+
+    // The fake applies each rename once onto the base index, so point
+    // the original key at the final name too — mirroring what the real
+    // buildIndex would produce after both renames.
+    fake.rename('sign.js', 'sign', 'fetchSign');
+    fake.rename('sign.js', 'hmacSign', 'fetchSign');
+    const text = await call('wc_annotate', {
+      symbol: 'sign.js:hmacSign',
+      name: 'fetchSign',
+    });
+    expect(text).toContain('Renamed sign.js:hmacSign → fetchSign');
+    expect(ws.annotations).toEqual([
+      {
+        symbol: 'sign.js:fetchSign',
+        rename: 'fetchSign',
+        originalName: 'sign',
+        note: 'HMAC with a hardcoded pepper',
+      },
+    ]);
+
+    const outline = await call('wc_outline', { module: 'sign.js' });
+    expect(outline).toContain('function fetchSign(value)');
+    expect(outline).toContain('HMAC with a hardcoded pepper');
+    const read = await call('wc_read', { target: 'sign.js:fetchSign' });
+    expect(read).toContain('Note on fetchSign:');
+    expect(read).toContain('HMAC with a hardcoded pepper');
+
+    // The re-keyed entry survives a cache round-trip.
+    const cached = await readWorkspaceFromCache(config, ws.id);
+    expect(cached?.annotations).toEqual(ws.annotations);
+  });
+
+  test('the sites count ignores the new name inside strings and comments', async () => {
+    const code = `function helper(value) {
+  // fetchUser handles the display name
+  return "fetchUser:" + value;
+}
+export { helper };`;
+    const ws = tinyWorkspace('main.js', code, [
+      {
+        module: 'main.js',
+        name: 'helper',
+        kind: 'function',
+        line: 1,
+        endLine: 4,
+        params: ['value'],
+        exported: true,
+        refCount: 0,
+      },
+    ]);
+    const { call, ws: after, fake } = await setup(ws);
+    fake.rename('main.js', 'helper', 'fetchUser');
+    const text = await call('wc_annotate', {
+      symbol: 'main.js:helper',
+      name: 'fetchUser',
+      note: 'Resolves the display name',
+    });
+    // Two binding splices (declaration + export specifier); the string
+    // and comment occurrences of the new name are not splices.
+    expect(text).toContain(
+      'Renamed main.js:helper → fetchUser (2 sites in main.js)',
+    );
+    expect(after.annotations).toEqual([
+      {
+        symbol: 'main.js:fetchUser',
+        rename: 'fetchUser',
+        originalName: 'helper',
+        note: 'Resolves the display name',
+      },
+    ]);
+    const renamed = after.modules.get('main.js')?.code ?? '';
+    expect(renamed).toContain('// fetchUser handles the display name');
+    expect(renamed).toContain('"fetchUser:" + value');
+
+    const read = await call('wc_read', { target: 'main.js:fetchUser' });
+    expect(read).toContain('Resolves the display name');
   });
 
   test('renamed code and annotations persist in the cache', async () => {
@@ -408,7 +555,7 @@ describe('wc_annotate', () => {
     expect(cached?.modules.get('sign.js')?.code).toBe(RENAMED_SIGN);
     expect(cached?.modules.get('api.js')?.code).toBe(API);
     expect(cached?.annotations).toEqual([
-      { symbol: 'sign.js:sign', rename: 'hmacSign' },
+      { symbol: 'sign.js:hmacSign', rename: 'hmacSign', originalName: 'sign' },
     ]);
     expect(
       cached?.index.symbols.find(

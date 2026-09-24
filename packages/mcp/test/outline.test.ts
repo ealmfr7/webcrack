@@ -79,6 +79,46 @@ describe('wc_outline', () => {
     expect(text).toContain('handles auth');
   });
 
+  test('a re-keyed annotation shows on the current name', async () => {
+    const ws = fixtureWorkspace();
+    const login = ws.index.symbols.find(
+      (s) => s.module === 'src/api.js' && s.name === 'login',
+    );
+    expect(login).toBeDefined();
+    if (login) login.name = 'checkLogin';
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: 'src/api.js:checkLogin',
+      rename: 'checkLogin',
+      originalName: 'login',
+      note: 'handles auth',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_outline', { module: 'src/api.js' });
+    expect(text).toContain('function checkLogin(user, pass)');
+    expect(text).toContain('renamed to checkLogin');
+    expect(text).toContain('handles auth');
+  });
+
+  test('a pre-rekey entry still shows on the new name via its rename', async () => {
+    const ws = fixtureWorkspace();
+    const login = ws.index.symbols.find(
+      (s) => s.module === 'src/api.js' && s.name === 'login',
+    );
+    expect(login).toBeDefined();
+    if (login) login.name = 'checkLogin';
+    ws.annotations = [];
+    ws.annotations.push({
+      symbol: 'src/api.js:login',
+      rename: 'checkLogin',
+      note: 'handles auth',
+    });
+    const { call } = await connect(ws);
+    const text = await call('wc_outline', { module: 'src/api.js' });
+    expect(text).toContain('function checkLogin(user, pass)');
+    expect(text).toContain('handles auth');
+  });
+
   test('resolves ./ prefix and bundle id like the plain path', async () => {
     const { call } = await connect(setup());
     const plain = await call('wc_outline', { module: 'src/api.js' });

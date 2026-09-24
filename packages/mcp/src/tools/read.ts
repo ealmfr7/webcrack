@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { WcError } from '../format/errors';
 import { numberLines, textResult } from '../format/response';
-import { parseTarget, resolveTarget } from '../format/target';
-import type { SymbolEntry, Workspace } from '../workspace/types';
+import { parseTarget, resolveModule, resolveTarget } from '../format/target';
+import { findAnnotation } from '../workspace/annotations';
+import type { Annotation, SymbolEntry, Workspace } from '../workspace/types';
 import { defineTool, readOnly, workspaceArg } from './define';
 
 /** Displayed raw lines longer than this are cut (minified originals). */
@@ -44,7 +45,11 @@ function cutLine(line: string, column?: number): string {
   return `${line.slice(0, MAX_RAW_LINE)}… (+${line.length - MAX_RAW_LINE} chars)`;
 }
 
-/** Notes/renames on symbols overlapping the displayed range. */
+/**
+ * Notes/renames on symbols overlapping the displayed range. Each binding
+ * has at most one annotation entry (re-keyed on rename), looked up by the
+ * symbol's current name, so the note shows next to the new name.
+ */
 function notesInRange(
   ws: Workspace,
   module: string,
@@ -52,25 +57,61 @@ function notesInRange(
   end: number,
 ): string[] {
   const notes: string[] = [];
-  for (const annotation of ws.annotations) {
-    const colon = annotation.symbol.lastIndexOf(':');
-    if (colon === -1) continue;
-    if (annotation.symbol.slice(0, colon) !== module) continue;
-    const name = annotation.symbol.slice(colon + 1);
-    const overlaps = ws.index.symbols.some(
-      (s) =>
-        s.module === module &&
-        s.name === name &&
-        s.line <= end &&
-        s.endLine >= start,
+  const seen = new Set<Annotation>();
+  for (const symbol of ws.index.symbols) {
+    if (symbol.module !== module) continue;
+    if (symbol.line > end || symbol.endLine < start) continue;
+    const annotation = findAnnotation(
+      ws.annotations,
+      symbol.module,
+      symbol.name,
     );
-    if (!overlaps) continue;
+    if (!annotation || seen.has(annotation)) continue;
+    seen.add(annotation);
     const parts: string[] = [];
     if (annotation.rename) parts.push(`renamed to ${annotation.rename}`);
     if (annotation.note) parts.push(annotation.note);
-    if (parts.length > 0) notes.push(`Note on ${name}: ${parts.join(' · ')}`);
+    if (parts.length > 0) {
+      notes.push(`Note on ${symbol.name}: ${parts.join(' · ')}`);
+    }
   }
   return notes;
+}
+
+/**
+ * Resolve `target`, following renames: when the index no longer has the
+ * name (it was renamed), an annotation matching it as an old name points
+ * at the current key, which resolves instead. Anything else rethrows the
+ * original error.
+ */
+function resolveReadTarget(ws: Workspace, target: string) {
+  try {
+    return resolveTarget(ws, target);
+  } catch (error) {
+    if (!(error instanceof WcError)) throw error;
+    const parsed = parseTarget(target);
+    if (parsed.kind === 'symbol') {
+      const entry = resolveModule(ws, parsed.module);
+      const annotation = findAnnotation(
+        ws.annotations,
+        entry.path,
+        parsed.symbol,
+      );
+      if (annotation === undefined) throw error;
+      return resolveTarget(ws, annotation.symbol);
+    }
+    if (parsed.kind === 'bare') {
+      const matches = ws.annotations.filter(
+        (annotation) =>
+          annotation.originalName === parsed.name ||
+          annotation.rename === parsed.name,
+      );
+      if (matches.length === 1) {
+        return resolveTarget(ws, matches[0].symbol);
+      }
+    }
+    throw error;
+  }
 }
 
 function readClean(
@@ -79,7 +120,7 @@ function readClean(
   context: number,
   budget: number,
 ) {
-  const resolved = resolveTarget(ws, target);
+  const resolved = resolveReadTarget(ws, target);
   const entry = ws.modules.get(resolved.module);
   if (!entry) {
     throw new WcError(

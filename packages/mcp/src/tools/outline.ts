@@ -1,16 +1,9 @@
 import { z } from 'zod';
 import { paginate, textResult } from '../format/response';
 import { resolveModule } from '../format/target';
+import { findAnnotation } from '../workspace/annotations';
 import type { Annotation, SymbolEntry } from '../workspace/types';
 import { defineTool, pagination, readOnly, workspaceArg } from './define';
-
-function annotationFor(
-  annotations: Annotation[],
-  module: string,
-  name: string,
-): Annotation | undefined {
-  return annotations.find((a) => a.symbol === `${module}:${name}`);
-}
 
 function annotationSuffix(annotation: Annotation): string {
   const parts: string[] = [];
@@ -79,7 +72,7 @@ export const outline = defineTool({
     const symbols = ws.index.symbols.filter((s) => s.module === entry.path);
     const page = paginate(symbols, limit, offset);
     const annotated = (s: SymbolEntry) =>
-      annotationFor(ws.annotations, s.module, s.name);
+      findAnnotation(ws.annotations, s.module, s.name);
 
     const lines: string[] = [];
     if (detail === 'full') {

@@ -1,15 +1,46 @@
 import { z } from 'zod';
 import { WcError } from '../format/errors';
 import { textResult } from '../format/response';
-import { resolveSymbol } from '../format/target';
-import { renameSymbol } from '../workspace/annotations';
-import type { Location } from '../workspace/types';
+import { resolveModule, resolveSymbol } from '../format/target';
+import { findAnnotation, renameSymbol } from '../workspace/annotations';
+import type { Location, SymbolEntry, Workspace } from '../workspace/types';
 import { defineTool, workspaceArg } from './define';
 
-/** Added occurrences of `name` in `code` (word match, so `sign` skips `assign`). */
-function countOccurrences(code: string, name: string): number {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return code.match(new RegExp(`\\b${escaped}\\b`, 'g'))?.length ?? 0;
+/**
+ * Resolve `spec` to its symbol, following renames: when the index no
+ * longer has the name (it was renamed), an annotation matching it as an
+ * old name (`originalName` or a previous `rename`) points at the current
+ * key, which resolves instead. Anything else rethrows the original error.
+ */
+function resolveCurrentSymbol(
+  ws: Workspace,
+  spec: string,
+  from: Location | undefined,
+): SymbolEntry {
+  try {
+    return resolveSymbol(ws, spec, from);
+  } catch (error) {
+    if (!(error instanceof WcError) || from !== undefined) throw error;
+    const colon = spec.lastIndexOf(':');
+    if (colon !== -1) {
+      const entry = resolveModule(ws, spec.slice(0, colon).trim());
+      const name = spec.slice(colon + 1).trim();
+      const annotation = findAnnotation(ws.annotations, entry.path, name);
+      if (annotation !== undefined) {
+        return resolveSymbol(ws, annotation.symbol);
+      }
+    } else {
+      const oldName = spec.trim();
+      const matches = ws.annotations.filter(
+        (annotation) =>
+          annotation.originalName === oldName || annotation.rename === oldName,
+      );
+      if (matches.length === 1) {
+        return resolveSymbol(ws, matches[0].symbol);
+      }
+    }
+    throw error;
+  }
 }
 
 export const annotate = defineTool({
@@ -39,7 +70,7 @@ export const annotate = defineTool({
       );
     }
     const ws = ctx.store.get(args.workspace);
-    const symbol = resolveSymbol(
+    const symbol = resolveCurrentSymbol(
       ws,
       args.symbol,
       args.from as Location | undefined,
@@ -47,37 +78,48 @@ export const annotate = defineTool({
     const key = `${symbol.module}:${symbol.name}`;
     const lines: string[] = [];
     let readName = symbol.name;
+    let newKey = key;
 
     let changed: string[] = [];
     if (args.name !== undefined) {
-      const before = ws.modules.get(symbol.module)?.code ?? '';
-      changed = renameSymbol(ws, symbol, args.name);
-      const after = ws.modules.get(symbol.module)?.code ?? '';
-      const sites =
-        countOccurrences(after, args.name) -
-        countOccurrences(before, args.name);
+      const renamed = renameSymbol(ws, symbol, args.name);
+      changed = renamed.changed;
+      newKey = `${symbol.module}:${args.name}`;
       const perModule = changed
-        .map((module) => `${sites} site${sites === 1 ? '' : 's'} in ${module}`)
+        .map(
+          (module) =>
+            `${renamed.sites} site${renamed.sites === 1 ? '' : 's'} in ${module}`,
+        )
         .join(', ');
       lines.push(`Renamed ${key} → ${args.name} (${perModule}).`);
       readName = args.name;
     }
 
-    const existing = ws.annotations.find(
-      (annotation) => annotation.symbol === key,
-    );
+    // One entry per binding: a rename re-keys the existing entry to the
+    // new name (keeping the very first name in `originalName`), so a later
+    // note on the new name updates the same entry.
+    const existing = findAnnotation(ws.annotations, symbol.module, symbol.name);
     if (existing) {
-      if (args.name !== undefined) existing.rename = args.name;
+      if (args.name !== undefined) {
+        if (existing.originalName === undefined) {
+          const colon = existing.symbol.lastIndexOf(':');
+          existing.originalName = existing.symbol.slice(colon + 1);
+        }
+        existing.symbol = newKey;
+        existing.rename = args.name;
+      }
       if (args.note !== undefined) existing.note = args.note;
     } else {
       ws.annotations.push({
-        symbol: key,
-        ...(args.name === undefined ? {} : { rename: args.name }),
+        symbol: newKey,
+        ...(args.name === undefined
+          ? {}
+          : { rename: args.name, originalName: symbol.name }),
         ...(args.note === undefined ? {} : { note: args.note }),
       });
     }
     if (args.note !== undefined) {
-      lines.push(`Note recorded on ${key}: ${args.note}`);
+      lines.push(`Note recorded on ${newKey}: ${args.note}`);
     }
 
     await ctx.store.commit(ws, changed);
