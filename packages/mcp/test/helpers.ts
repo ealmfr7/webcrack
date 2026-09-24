@@ -61,7 +61,7 @@ const SIGN = `export function sign(value) {
 }`;
 
 // `extractReport()` run on each module's clean code above (real output,
-// captured 2026-09-24 via a throwaway vitest file inside packages/webcrack
+// captured 2026-09-23 via a throwaway vitest file inside packages/webcrack
 // parsing each const with @babel/parser and calling extractReport).
 const API_REPORT: Report = {
   urls: [
@@ -120,6 +120,8 @@ const SIGN_REPORT: Report = {
  *   that are globals or import bindings give the dotted name (`fetch`,
  *   `sign`, `JSON.stringify`, `localStorage.setItem`, `btoa`); a root that
  *   is a local binding gives `*.<prop>` (`(await res.json())` → `*.json`).
+ * - import bindings carry `importedName`/`from`; re-exports live in
+ *   `reexports` (empty here — the fixture has no barrels).
  */
 export function fixtureWorkspace(): Workspace {
   return {
@@ -130,7 +132,7 @@ export function fixtureWorkspace(): Workspace {
       bytes: API.length + SIGN.length,
     },
     original: `${API}\n${SIGN}`,
-    bundle: { type: 'esbuild', entryId: 'src/api.js' },
+    bundle: { type: 'esbuild', entryId: '0' },
     modules: new Map([
       [
         'src/api.js',
@@ -163,6 +165,8 @@ export function fixtureWorkspace(): Workspace {
           endLine: 1,
           exported: false,
           refCount: 0,
+          importedName: 'sign',
+          from: 'src/sign.js',
         },
         {
           module: 'src/api.js',
@@ -225,6 +229,7 @@ export function fixtureWorkspace(): Workspace {
         },
       ],
       imports: { 'src/api.js': ['src/sign.js'], 'src/sign.js': [] },
+      reexports: [],
     },
     report: {
       'src/api.js': API_REPORT,

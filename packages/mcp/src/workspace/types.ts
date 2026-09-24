@@ -39,6 +39,14 @@ export type SymbolKind =
 /**
  * Top-level bindings only: functions, classes, class methods, top-level
  * variables, and imports. No locals, no params.
+ *
+ * Naming rules: methods are named `Class.method` (dotted); `const f = () => {}`
+ * and `const f = function () {}` are kind `function` with `params` recorded and
+ * count as a named function for `caller`; `export default function () {}` and an
+ * anonymous default-exported class are named `default`; CJS `const x =
+ * require('./x.js')` is kind `import` with `importedName: '*'` and `from` set,
+ * while `module.exports.x = …` / `exports.x = …` sets `exported` on `x` (or
+ * creates a variable symbol `x`).
  */
 export interface SymbolEntry {
   module: string;
@@ -53,9 +61,41 @@ export interface SymbolEntry {
    * Number of refs whose `defModule`/`defLine`/`name` match this symbol,
    * INCLUDING cross-module refs that reach it through imports
    * (e.g. `sign.js:sign` has `refCount` 1 from the `sign(user)` call in
-   * `api.js`, resolved via the `import { sign }` binding).
+   * `api.js`, resolved via the `import { sign }` binding). Only defined after
+   * linking (`linkIndex`); `indexModule` leaves it at 0.
    */
   refCount: number;
+  /**
+   * For kind `import`: the name in the source module (`'default'` for a
+   * default import, `'*'` for a namespace import or CJS `require`, otherwise
+   * the exported name, e.g. `import { sign as s }` gives `name: 's'` with
+   * `importedName: 'sign'`).
+   */
+  importedName?: string;
+  /**
+   * For kind `import`: the resolved module path the binding comes from
+   * (e.g. `import { sign } from './sign.js'` in `src/api.js` gives
+   * `from: 'src/sign.js'`).
+   */
+  from?: string;
+}
+
+/**
+ * One re-exported binding: `export { name } from '…'`, `export { x as name }
+ * from '…'`, or `export * from '…'` (recorded with both names as `'*'`).
+ */
+export interface ReexportEntry {
+  /** Name exported from the re-exporting module. */
+  name: string;
+  /** Name in the source module (`'default'` | `'*'` | name). */
+  importedName: string;
+  /** Resolved module path the binding comes from. */
+  from: string;
+}
+
+/** A `ReexportEntry` tagged with its module (for `WorkspaceIndex`). */
+export interface WorkspaceReexportEntry extends ReexportEntry {
+  module: string;
 }
 
 export interface CallSite {
@@ -68,7 +108,8 @@ export interface CallSite {
    * (`fetch`, `JSON.stringify`, `localStorage.setItem`, `axios.post`,
    * `sign` for a call through an import). A root that is a local binding
    * or any other expression gives `*.<prop>` (e.g. `(await res.json())`
-   * on line 8 of `src/api.js` gives `*.json`).
+   * on line 8 of `src/api.js` gives `*.json`). Member access on a namespace
+   * import keeps the dotted name (`ns.sign()` gives `ns.sign`).
    */
   callee: string;
   /** Nearest enclosing NAMED function, if any. */
@@ -97,11 +138,15 @@ export interface RefEntry {
   module: string;
   /** 1-based line of the reference in the module's clean code. */
   line: number;
-  /** Name of the referenced binding. */
+  /**
+   * Name of the referenced binding. Member access on a namespace import
+   * keeps the dotted name (`ns.sign` refers to the exported symbol `sign`,
+   * with `defModule`/`defLine` set after linking).
+   */
   name: string;
   /**
    * Module where the binding is defined. Absent for refs to imported
-   * bindings before linking (see `ModuleIndex`), and for globals.
+   * bindings before linking (see `ModuleIndex`). Globals are never refs.
    */
   defModule?: string;
   /** 1-based definition line. Absent under the same conditions. */
@@ -118,21 +163,34 @@ export interface RefEntry {
  * `linkIndex` resolves them to the exporting module afterwards.
  */
 export interface ModuleIndex {
+  /** In source order. */
   symbols: SymbolEntry[];
+  /** In source order (Babel enter order). */
   calls: CallSite[];
+  /** In source order. */
   strings: StringLiteralEntry[];
+  /** In source order. */
   refs: RefEntry[];
   /** Resolved module paths this module imports/requires. */
   imports: string[];
+  /** In source order. */
+  reexports: ReexportEntry[];
 }
 
+/** Module keys are webcrack paths with the leading `./` stripped. */
 export interface WorkspaceIndex {
+  /** In source order (module order, then source order within each module). */
   symbols: SymbolEntry[];
+  /** In source order (Babel enter order). */
   calls: CallSite[];
+  /** In source order. */
   strings: StringLiteralEntry[];
+  /** In source order. */
   refs: RefEntry[];
   /** module path -> module paths it imports/requires. */
   imports: Record<string, string[]>;
+  /** In source order. */
+  reexports: WorkspaceReexportEntry[];
 }
 
 export interface SearchHit {
