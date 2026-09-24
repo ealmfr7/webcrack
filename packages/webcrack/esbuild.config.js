@@ -33,7 +33,7 @@ const babelImportPlugin = {
  */
 const configs = [
   {
-    entryPoints: ['src/index.ts'],
+    entryPoints: ['src/index.ts', 'src/analysis-entry.ts'],
   },
   {
     entryPoints: [
@@ -45,6 +45,16 @@ const configs = [
     outExtension: { '.js': '.cjs' },
     format: 'cjs',
     bundle: false,
+  },
+  {
+    entryPoints: [
+      {
+        in: 'src/analysis-entry.ts',
+        out: 'analysis-entry',
+      },
+    ],
+    outExtension: { '.js': '.cjs' },
+    format: 'cjs',
   },
   {
     entryPoints: ['src/cli.ts'],

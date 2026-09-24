@@ -18,6 +18,16 @@
         "types": "./dist/index.d.ts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./analysis": {
+      "import": {
+        "types": "./dist/analysis-entry.d.ts",
+        "default": "./dist/analysis-entry.js"
+      },
+      "require": {
+        "types": "./dist/analysis-entry.d.ts",
+        "default": "./dist/analysis-entry.cjs"
+      }
     }
   },
   "files": [
