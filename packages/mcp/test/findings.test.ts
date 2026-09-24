@@ -1,3 +1,4 @@
+import { parse } from '@babel/parser';
 import { expect, test } from 'vitest';
 import type { Report } from 'webcrack/analysis';
 import {
@@ -284,6 +285,28 @@ test('precomputed ws.findings is used instead of parsing', () => {
   expect(collectFindings(ws, 'crypto', [mod])).toEqual(expected);
   expect(collectFindings(ws, 'sinks', [mod])).toEqual([]);
   expect(summarizeFindings(ws).counts.crypto).toBe(1);
+});
+
+test('precompute with cache:false retains no ASTs', () => {
+  const ws = fixtureWorkspace();
+  expect(ws.findings).toBeUndefined();
+  let parses = 0;
+  const countingParse: typeof parse = (code, options) => {
+    parses += 1;
+    return parse(code, options);
+  };
+  const modules = [...ws.modules.values()];
+  precomputeModuleFindings(modules, { cache: false, parse: countingParse });
+  expect(parses).toBe(modules.length);
+  // On-demand query on a workspace WITHOUT findings must parse every module
+  // again: precompute must not have populated the per-entry cache.
+  const before = parses;
+  collectFindings(ws, 'sinks', modules, { parse: countingParse });
+  expect(parses - before).toBe(modules.length);
+  // ...while the on-demand fallback path itself still caches: repeating the
+  // same query on unchanged code parses nothing.
+  collectFindings(ws, 'sinks', modules, { parse: countingParse });
+  expect(parses - before).toBe(modules.length);
 });
 
 test('a workspace without findings falls back to parsing', () => {

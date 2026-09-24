@@ -137,20 +137,43 @@ const astCache = new WeakMap<
   { code: string; ast: ParseResult<t.File> | undefined }
 >();
 
-function moduleAst(module: ModuleEntry): t.File | undefined {
-  const cached = astCache.get(module);
-  if (cached !== undefined && cached.code === module.code) return cached.ast;
-  let ast: ParseResult<t.File> | undefined;
+export interface ModuleAstOptions {
+  /**
+   * When `false`, parse fresh without reading or populating the per-entry
+   * cache. Precompute/commit pass `false` (nothing re-reads those trees,
+   * queries use `ws.findings`); on-demand queries use the default cached
+   * path.
+   */
+  cache?: boolean;
+  /** Injectable parser (defaults to `@babel/parser`); lets tests count parses. */
+  parse?: typeof parse;
+}
+
+function parseFresh(
+  code: string,
+  parseFn: typeof parse,
+): ParseResult<t.File> | undefined {
   try {
-    ast = parse(module.code, {
+    return parseFn(code, {
       sourceType: 'unambiguous',
       allowReturnOutsideFunction: true,
       errorRecovery: true,
       plugins: ['jsx'],
     });
   } catch {
-    ast = undefined;
+    return undefined;
   }
+}
+
+function moduleAst(
+  module: ModuleEntry,
+  opts?: ModuleAstOptions,
+): t.File | undefined {
+  const parseFn = opts?.parse ?? parse;
+  if (opts?.cache === false) return parseFresh(module.code, parseFn);
+  const cached = astCache.get(module);
+  if (cached !== undefined && cached.code === module.code) return cached.ast;
+  const ast = parseFresh(module.code, parseFn);
   astCache.set(module, { code: module.code, ast });
   return ast;
 }
@@ -327,8 +350,8 @@ function isStringArg(
   );
 }
 
-function collectFromAst(mod: ModuleEntry): Finding[] {
-  const ast = moduleAst(mod);
+function collectFromAst(mod: ModuleEntry, opts?: ModuleAstOptions): Finding[] {
+  const ast = moduleAst(mod, opts);
   if (!ast) return [];
   const findings: Finding[] = [];
   const seen = new Set<string>();
@@ -515,22 +538,28 @@ function collectFromAst(mod: ModuleEntry): Finding[] {
  * AST-based findings (`sinks`/`storage`/`crypto`) for one module, parsed on
  * demand (and cached per entry — see `moduleAst`). Exported so the store can
  * precompute and refresh `Workspace.findings` without going through a
- * workspace.
+ * workspace. The store passes `{ cache: false }` there: nothing re-reads
+ * those trees, so they must not be retained.
  */
-export function collectModuleAstFindings(mod: ModuleEntry): Finding[] {
-  return collectFromAst(mod);
+export function collectModuleAstFindings(
+  mod: ModuleEntry,
+  opts?: ModuleAstOptions,
+): Finding[] {
+  return collectFromAst(mod, opts);
 }
 
 /**
  * Precomputed AST-based findings for every module, keyed by module path —
  * the shape stored on `Workspace.findings` and in `findings.json`.
  * "Process once, query many": `open`/`commit` compute this, queries read it.
+ * The store passes `{ cache: false }` so precomputing retains no ASTs.
  */
 export function precomputeModuleFindings(
   modules: Iterable<ModuleEntry>,
+  opts?: ModuleAstOptions,
 ): Record<string, Finding[]> {
   const out: Record<string, Finding[]> = {};
-  for (const mod of modules) out[mod.path] = collectFromAst(mod);
+  for (const mod of modules) out[mod.path] = collectFromAst(mod, opts);
   return out;
 }
 
@@ -547,6 +576,7 @@ export function collectFindings(
   ws: Workspace,
   category: FindingCategory,
   modules?: ModuleEntry[],
+  opts?: ModuleAstOptions,
 ): Finding[] {
   const mods = modules ?? [...ws.modules.values()];
   switch (category) {
@@ -562,7 +592,7 @@ export function collectFindings(
       const findings: Finding[] = [];
       for (const mod of mods) {
         const precomputed = ws.findings?.[mod.path];
-        const all = precomputed ?? collectFromAst(mod);
+        const all = precomputed ?? collectFromAst(mod, opts);
         findings.push(...all.filter((f) => f.category === category));
       }
       // Already in module order, then source order (Babel enter order).
