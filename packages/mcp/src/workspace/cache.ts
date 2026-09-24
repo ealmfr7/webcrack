@@ -1,4 +1,12 @@
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import type { Config } from '../config';
 import { WcError } from '../format/errors';
@@ -210,6 +218,148 @@ export async function writeWorkspaceToCache(
   if (workspace.findings !== undefined) {
     await writeFileAtomic(
       join(dir, 'findings.json'),
+      JSON.stringify(workspace.findings),
+    );
+  }
+}
+
+function cacheFile(dir: string, name: string): string {
+  return join(dir, name);
+}
+
+function moduleCacheFile(dir: string, modulePath: string): string {
+  const file = join(dir, 'modules', modulePath);
+  if (relative(dir, file).startsWith('..')) {
+    throw new WcError(
+      `Cannot cache module "${modulePath}": the path escapes the cache directory. Rename the module or report the bundle as unsupported.`,
+    );
+  }
+  return file;
+}
+
+/** Read the previous `meta.json` module list, so stale module files can be
+ * removed. A missing or corrupt meta is not an error: there is just nothing
+ * known to be stale. */
+async function readPreviousModulePaths(
+  dir: string,
+): Promise<Set<string> | undefined> {
+  try {
+    const raw: unknown = JSON.parse(
+      await readFile(join(dir, 'meta.json'), 'utf8'),
+    ) as unknown;
+    return new Set(parseMeta(raw).modules.map((item) => item.path));
+  } catch {
+    return undefined;
+  }
+}
+
+function buildCacheMeta(
+  workspace: Workspace,
+  webcrackVersion: string,
+): CacheMeta {
+  return {
+    id: workspace.id,
+    source: workspace.source,
+    ...(workspace.bundle === undefined ? {} : { bundle: workspace.bundle }),
+    stats: workspace.stats,
+    openedAt: new Date().toISOString(),
+    webcrackVersion,
+    modules: [...workspace.modules.values()].map((module) => ({
+      path: module.path,
+      bundleId: module.bundleId,
+      isEntry: module.isEntry,
+      tags: module.tags,
+    })),
+  };
+}
+
+/**
+ * Incrementally persist a `store.commit` mutation under
+ * `<cacheDir>/<id>/`: only the `modules/<path>` files for `changedPaths`
+ * are written (removed modules have their file deleted instead), plus the
+ * small derived files (`meta.json`, `index.json`, `report.json`,
+ * `interpreters.json`, `annotations.json` and `findings.json`). Modules
+ * that appear in the workspace but were never cached (added without being
+ * listed in `changedPaths`) are written too, so the cache never misses a
+ * file. A note-only commit (`changedPaths` empty) rewrites the derived
+ * files without touching any module file. All writes stay atomic, as in
+ * `writeWorkspaceToCache`, and `original.js` is left alone: it never
+ * changes on commit.
+ */
+export async function writeWorkspaceChangesToCache(
+  config: Config,
+  workspace: Workspace,
+  changedPaths: string[],
+  webcrackVersion: string,
+): Promise<void> {
+  for (const module of workspace.modules.values()) {
+    assertSafeModulePath(module.path);
+  }
+  const changed = new Set(changedPaths);
+  for (const path of changed) {
+    assertSafeModulePath(path);
+  }
+  const dir = join(config.cacheDir, workspace.id);
+  const previous = await readPreviousModulePaths(dir);
+  await writeFileAtomic(
+    cacheFile(dir, 'meta.json'),
+    `${JSON.stringify(buildCacheMeta(workspace, webcrackVersion), null, 2)}\n`,
+  );
+  // `original.js` never changes on commit, so it is left alone — unless it
+  // is missing (a workspace that never went through `open`), in which case
+  // the cache would otherwise be unreadable.
+  try {
+    await stat(cacheFile(dir, 'original.js'));
+  } catch {
+    await writeFileAtomic(cacheFile(dir, 'original.js'), workspace.original);
+  }
+  for (const path of changed) {
+    const module = workspace.modules.get(path);
+    const file = moduleCacheFile(dir, path);
+    if (module === undefined) {
+      await rm(file, { force: true });
+    } else {
+      await writeFileAtomic(file, module.code);
+    }
+  }
+  if (previous === undefined) {
+    // No cache yet: populate every module file, like `writeWorkspaceToCache`.
+    for (const module of workspace.modules.values()) {
+      if (!changed.has(module.path)) {
+        await writeFileAtomic(moduleCacheFile(dir, module.path), module.code);
+      }
+    }
+  } else {
+    for (const path of previous) {
+      if (!workspace.modules.has(path) && !changed.has(path)) {
+        await rm(moduleCacheFile(dir, path), { force: true });
+      }
+    }
+    for (const module of workspace.modules.values()) {
+      if (!previous.has(module.path) && !changed.has(module.path)) {
+        await writeFileAtomic(moduleCacheFile(dir, module.path), module.code);
+      }
+    }
+  }
+  await writeFileAtomic(
+    cacheFile(dir, 'index.json'),
+    JSON.stringify(workspace.index),
+  );
+  await writeFileAtomic(
+    cacheFile(dir, 'report.json'),
+    JSON.stringify(workspace.report),
+  );
+  await writeFileAtomic(
+    cacheFile(dir, 'interpreters.json'),
+    JSON.stringify(workspace.interpreters),
+  );
+  await writeFileAtomic(
+    cacheFile(dir, 'annotations.json'),
+    JSON.stringify(workspace.annotations),
+  );
+  if (workspace.findings !== undefined) {
+    await writeFileAtomic(
+      cacheFile(dir, 'findings.json'),
       JSON.stringify(workspace.findings),
     );
   }
