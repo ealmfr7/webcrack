@@ -364,7 +364,7 @@ pisarse:
       investigar (goto/refs/read/annotate) → informe final.
 - [x] **M3.3** Resources MCP: `webcrack://<ws>/module/<ruta>` y
       `webcrack://<ws>/report` para clientes que prefieran adjuntar recursos.
-- [ ] **M3.4** `wc_trace value=…`: seguir el flujo de un valor (dónde se
+- [x] **M3.4** `wc_trace value=…`: seguir el flujo de un valor (dónde se
       construye una URL/token y qué función lo envía) usando refs + asignaciones.
 - [x] **M3.5** `wc_diff a b`: comparar dos workspaces (módulos cambiados por
       hash estructural, endpoints/secrets nuevos o eliminados).
