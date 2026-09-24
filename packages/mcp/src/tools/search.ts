@@ -29,7 +29,7 @@ export const search = defineTool({
   name: 'wc_search',
   title: 'Search code',
   description:
-    'Search the clean code. kind: text (substring), regex, string (string literals only), identifier (bindings by name), call (call sites, e.g. "fetch", "axios.post", "*.postMessage"), ast (structural pattern with $X / $$ARGS wildcards, e.g. `fetch($URL, { method: "POST", $$REST })`). Returns module:line hits with one line of context.',
+    'Search the clean code. kind: text (substring), regex, string (string literals only), identifier (bindings by name, case-insensitive substring; quote for exact case-sensitive match, e.g. `"sign"`), call (call sites, e.g. "fetch", "axios.post", "*.postMessage"), ast (structural pattern with $X / $$ARGS wildcards, e.g. `fetch($URL, { method: "POST", $$REST })`). Returns module:line hits with one line of context.',
   inputSchema: {
     workspace: workspaceArg,
     query: z.string(),
@@ -301,9 +301,10 @@ function identifierHits(
 ): Hit[] {
   const scope = new Set(modules.map((m) => m.path));
   const quoted = /^(['"])([\s\S]*)\1$/.exec(query);
-  // Exact match when quoted, substring otherwise.
+  // Exact case-sensitive match when quoted, case-insensitive substring otherwise.
+  const needle = query.toLowerCase();
   const matches = (name: string): boolean =>
-    quoted ? name === quoted[2] : name.includes(query);
+    quoted ? name === quoted[2] : name.toLowerCase().includes(needle);
   const order = new Map(modules.map((m, i) => [m.path, i]));
   const hits: Hit[] = [];
   for (const sym of ws.index.symbols) {
