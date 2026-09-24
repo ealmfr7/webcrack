@@ -428,6 +428,13 @@ export async function runCli(argv: string[], io: CliIO): Promise<void> {
   await program.parseAsync(argv);
 }
 
+export function installStdoutEpipeGuard(stream: NodeJS.WritableStream): void {
+  stream.on('error', (error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'EPIPE') return;
+    throw error;
+  });
+}
+
 export interface MultiInputItem {
   /** Input file path (used for the per-input output directory name). */
   name: string;
