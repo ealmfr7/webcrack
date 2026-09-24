@@ -1,3 +1,4 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { expect, test } from 'vitest';
 import { connect, fixtureWorkspace } from './helpers';
 
@@ -29,19 +30,18 @@ test('registers the audit prompt', async () => {
 
 test('tool errors are returned as actionable tool results', async () => {
   const { client } = await connect();
-  const result = await client.callTool({
+  const result = (await client.callTool({
     name: 'wc_open',
     arguments: { source: 'var a = 1;' },
-  });
+  })) as CallToolResult;
   expect(result.isError).toBe(true);
   expect(result.content).toEqual([
-    { type: 'text', text: expect.stringContaining('M1.3') },
+    { type: 'text', text: expect.stringContaining('M1.3') as string },
   ]);
 });
 
 test('preloaded workspaces are available to tools', async () => {
-  const { call } = await connect(fixtureWorkspace());
-  // wc_map is a stub until M1.4: it reaches the handler instead of failing
-  // with "No workspace is open".
-  await expect(call('wc_map')).rejects.toThrow('M1.4');
+  const { store } = await connect(fixtureWorkspace());
+  expect(store.get().id).toBe('fixture1');
+  expect(store.get('fixture1').modules.has('src/api.js')).toBe(true);
 });

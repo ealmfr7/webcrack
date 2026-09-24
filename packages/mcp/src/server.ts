@@ -43,7 +43,7 @@ export function createServer(
           },
         };
         try {
-          return await tool.handler(args as never, ctx);
+          return await tool.handler(args, ctx);
         } catch (error) {
           return errorResult(error);
         }

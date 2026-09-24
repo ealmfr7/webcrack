@@ -101,8 +101,8 @@ interface Workspace {
   bundle?: { type: string; entryId: string };
   modules: Map<string, ModuleEntry>; // clave = ruta legible ("src/api.js")
   index: WorkspaceIndex; // ver 3.2
-  report: Report; // extractReport() agregado por módulo
-  interpreters: InterpreterSummary[]; // detectInterpreters()
+  report: Record<string, Report>; // extractReport() por módulo (clave = module path; líneas de módulo)
+  interpreters: InterpreterSummary[]; // resumen serializable de detectInterpreters()
   annotations: Annotations; // renames + notas (persistidos)
   stats: { openMs: number; techniques: string[] };
 }
@@ -119,13 +119,25 @@ Se construye **re-parseando el código limpio generado** de cada módulo (con
 exactamente con lo que devuelve `wc_read`. Contenido:
 
 - **symbols**: funciones, clases, métodos, variables de nivel superior,
-  exports; con `module`, `name`, `kind`, `line`, `endLine`, `params`, `exported`.
-- **refs**: por binding (Babel `scope`): definición + referencias
-  (`module:line`), y llamadas salientes (callees) por función.
-- **imports/exports** entre módulos (reutilizar `moduleGraph`).
-- **strings**: literales con posición (para `wc_search kind=string`).
-- **calls**: nombre de callee normalizado (`fetch`, `axios.post`,
-  `*.postMessage`, `localStorage.setItem`) con posición.
+  imports; con `module`, `name`, `kind`, `line`, `endLine`, `params`, `exported`.
+  Sin kind `export`: el flag `exported` lo cubre. `refCount` = nº de refs cuyo
+  `defModule`/`defLine`/`name` coinciden, incluyendo refs cruzadas vía imports.
+- **refs** (`RefEntry[]`): usos de bindings de nivel de módulo (definidos o
+  importados), con `module`, `line`, `name`, `defModule?`, `defLine?`, `kind`
+  (`read`|`write`|`call`). `indexModule` deja SIN resolver las refs a bindings
+  importados (sin `defModule`/`defLine`); `linkIndex` las resuelve al módulo
+  exportador. Declaraciones e import-specifiers NO son refs; usos de globales
+  y locales tampoco (los call sites los cubren `calls`).
+- **imports/exports** entre módulos. Los grafos (`wc_graph`, M2.2) se
+  construyen a query time desde `index.imports`/`index.calls`; NO se cachean
+  `moduleGraph`/`callGraph` (necesitan AST/Bundle, no disponibles en caché).
+- **strings**: literales con posición (para `wc_search kind=string`),
+  INCLUYENDO sources de import/require y EXCLUYENDO keys de objetos.
+- **calls**: nombre de callee normalizado con posición. Raíz global o binding
+  importado → nombre punteado (`fetch`, `axios.post`, `sign`,
+  `localStorage.setItem`); raíz local u otra expresión → `*.<prop>`
+  (`(await res.json())` → `*.json`). `caller` = función nombrada envolvente
+  más cercana.
 - **tags** por módulo (ver M1.4).
 
 Todo el índice debe ser serializable (JSON) para la caché.
@@ -169,20 +181,24 @@ Refs: called from 12 places (wc_refs src/api/client.js:request)
 
 Todas llevan prefijo `wc_`. `workspace` es opcional en todas: si se omite se
 usa el último abierto. Anotaciones MCP (`readOnlyHint`, etc.) donde aplique.
+Los formatos `target` (`módulo`, `módulo:línea`, `módulo:inicio-fin`,
+`módulo:símbolo`, `símbolo`) y `symbol` se resuelven con el helper compartido
+`format/target.ts` (`parseTarget`, `resolveModule`, `resolveSymbol`): nadie
+reimplementa ese parseo en su tool.
 
 | Tool             | Entrada (resumen)                                                                                                                        | Devuelve                                                                        |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `wc_open`        | `source` (ruta, URL http(s) o código), `options?` {`unpack`,`deobfuscate`,`unminify`,`jsx`,`mangle`,`renameHeuristics`}, `refresh?`      | Ficha del workspace (§3.4)                                                      |
 | `wc_workspaces`  | —                                                                                                                                        | Workspaces abiertos/cacheados (id, fuente, módulos)                             |
-| `wc_map`         | `path?` (prefijo de carpeta), `tag?`, `sort?` (`path`,`size`,`refs`), `limit`,`offset`                                                   | Árbol de módulos: tamaño, nº exports/imports, tags, entry                       |
-| `wc_outline`     | `module`                                                                                                                                 | Símbolos del módulo con línea, tipo, params, exported, nº refs                  |
+| `wc_map`         | `path?` (prefijo de carpeta), `tag?`, `sort?` (`path`,`size`,`refs`), `detail?` (M1.4: `concise`,`full`), `limit`,`offset`               | Árbol de módulos: tamaño, nº exports/imports, tags, entry                       |
+| `wc_outline`     | `module`, `detail?` (M1.5: `concise`,`full`)                                                                                             | Símbolos del módulo con línea, tipo, params, exported, nº refs                  |
 | `wc_search`      | `query`, `kind` (`text`,`regex`,`string`,`identifier`,`call`,`ast`), `module?`, `limit`,`offset`                                         | Hits `módulo:línea` + línea de contexto                                         |
-| `wc_findings`    | `category` (`summary`,`endpoints`,`urls`,`secrets`,`regexes`,`interesting`,`sinks`,`storage`,`crypto`,`vm`), `module?`, `limit`,`offset` | Hallazgos con `módulo:línea`                                                    |
-| `wc_read`        | `target` (`módulo`, `módulo:línea`, `módulo:inicio-fin`, `módulo:símbolo` o `símbolo`), `view` (`clean`,`raw`), `context?`               | Código numerado + resumen de refs                                               |
+| `wc_findings`    | `category` (`summary`,`endpoints`,`urls`,`secrets`,`regexes`,`interesting`,`sinks`,`storage`,`crypto`,`vm`), `module?`, `reveal?` (M1.7: ver secretos completos), `limit`,`offset` | Hallazgos con `módulo:línea`                           |
+| `wc_read`        | `target` (`módulo`, `módulo:línea`, `módulo:inicio-fin`, `módulo:símbolo` o `símbolo`), `view` (`clean`,`raw`), `detail?` (M1.5: `concise`,`full`), `context?` | Código numerado + resumen de refs                                      |
 | `wc_goto`        | `symbol` (nombre o `módulo:nombre`), `from?` (`módulo:línea` para resolver por scope)                                                    | Definición: ubicación + firma + primeras líneas                                 |
 | `wc_refs`        | `symbol`, `direction` (`callers`,`callees`,`all`), `limit`,`offset`                                                                      | Referencias / llamadas con contexto                                             |
 | `wc_graph`       | `kind` (`modules`,`calls`), `root?`, `depth` (def. 2), `format` (`tree`,`json`,`dot`)                                                    | Subgrafo alrededor de `root`                                                    |
-| `wc_deobfuscate` | `target` (función / rango / módulo), `passes?`, `expression?` (evaluar en sandbox)                                                       | Antes/después (diff compacto) y aplica al workspace si `apply=true`             |
+| `wc_deobfuscate` | `target` (función / rango / módulo), `passes?`, `expression?` (evaluar en sandbox), `apply?` (M2.4: integra el resultado en el workspace) | Antes/después (diff compacto) y aplica al workspace si `apply=true`            |
 | `wc_annotate`    | `symbol`, `name?`, `note?`                                                                                                               | Confirmación; los renames se aplican con `scope.rename` y se reindexa el módulo |
 | `wc_export`      | `dir`, `include?` (`code`,`report`,`notes`,`graph`)                                                                                      | Rutas escritas                                                                  |
 
@@ -220,8 +236,9 @@ pisarse:
   tarea necesita editarlo.
 - **Sin esperar al indexer**: cada tool se desarrolla y prueba contra
   `fixtureWorkspace()` de `test/helpers.ts`, precargado con
-  `connect(fixtureWorkspace())`. Si la tool necesita más datos, se amplía el
-  fixture (aditivo).
+  `connect(fixtureWorkspace())`. La wave B/C NUNCA edita `test/helpers.ts`;
+  si la tool necesita más datos, se añaden en su propio test
+  (`const ws = fixtureWorkspace(); ws.interpreters = [...]`).
 - **Un test por tarea**: `test/<tool>.test.ts`, para no generar conflictos.
 
 **Orden de oleadas** (dentro de cada oleada, todo en paralelo):
@@ -229,19 +246,20 @@ pisarse:
 | Oleada               | Tareas                | Archivos propios                                                                        |
 | -------------------- | --------------------- | --------------------------------------------------------------------------------------- |
 | A (serie, primero)   | M0.2, M0.3            | `packages/webcrack/{package.json,esbuild.config.js}`, `packages/webcrack/src/analysis-entry.ts` (nuevo), `mcp/src/config.ts` |
-| B                    | M1.1                  | `workspace/loader.ts`                                                                   |
-| B                    | M1.2                  | `workspace/indexer.ts`, `workspace/store.ts`                                            |
+| A (serie, primero)   | A2.1                  | contratos: `workspace/types.ts`, `format/target.ts` (nuevo), stubs (`indexer`, `tags`, `loader`, `store`, `search-ast`), `test/{helpers,target}` |
+| B                    | M1.1                  | `workspace/loader.ts` (suyo)                                                            |
+| B                    | M1.2                  | `workspace/{indexer,store}.ts` (suyos) + módulo de caché (nuevo, suyo)                  |
 | B                    | M1.4                  | `workspace/tags.ts`, `tools/map.ts`                                                     |
 | B                    | M1.5                  | `tools/outline.ts`, `tools/read.ts`                                                     |
 | B                    | M1.6                  | `tools/search.ts`                                                                       |
-| B                    | M1.7                  | `tools/findings.ts`, `tools/goto.ts`                                                    |
+| B                    | M1.7                  | `tools/findings.ts`, `tools/goto.ts`, `workspace/findings.ts` (lógica compartida de findings, usada luego por M1.3 overview y M3.1) |
 | B                    | M2.1                  | `tools/refs.ts`                                                                         |
 | B                    | M2.2                  | `tools/graph.ts`                                                                        |
 | B                    | M3.2                  | `prompts/audit.ts`                                                                      |
-| C (tras M1.1 + M1.2) | M1.3                  | `tools/open.ts`                                                                         |
+| C (tras M1.1 + M1.2) | M1.3                  | `tools/open.ts` (solo formato; `store.open`/`listCached`/caché son de M1.2)             |
 | C                    | M2.3                  | `tools/annotate.ts`, `workspace/annotations.ts`                                         |
 | C                    | M2.4                  | `tools/deobfuscate.ts`                                                                  |
-| C                    | M2.5                  | `tools/search-ast.ts` (lo llama `search.ts` con `kind=ast`)                             |
+| C                    | M2.5                  | `workspace/search-ast.ts` (lo llama `search.ts` con `kind=ast`)                         |
 | C                    | M3.1, M3.3            | `tools/export.ts`, `resources/`                                                         |
 | D (tras C)           | M1.8, M2.6, M3.4–M3.7 | `evals/`, `tools/trace.ts`, `tools/diff.ts`, docs                                       |
 
@@ -261,7 +279,8 @@ pisarse:
       `pnpm install` en una terminal interactiva (pide confirmar la
       reinstalación de `node_modules`), tipar `Workspace.report` como `Report` y
       `interpreters` en `workspace/types.ts`, y rellenar `report` en
-      `fixtureWorkspace()`.
+      `fixtureWorkspace()`. (Nota: ese resto —tipos y `report` del
+      fixture— se hizo finalmente en A2.1.)
 - [x] **M0.3** `config.ts`: `WEBCRACK_MCP_ROOTS` (rutas permitidas, por
       defecto `cwd`), `WEBCRACK_MCP_CACHE`, `WEBCRACK_MCP_MAX_INPUT` (def. 20 MB),
       `WEBCRACK_MCP_TIMEOUT_MS` (def. 120 000), `WEBCRACK_MCP_OUTPUT_BUDGET`
@@ -272,15 +291,19 @@ pisarse:
 - [ ] **M1.1** `workspace/loader.ts`: `path` (dentro de roots, error
       accionable si no), `url` (solo http/https, límite de tamaño, timeout,
       sin seguir a `file:`), `code` literal. Detección automática del tipo.
-- [ ] **M1.2** `workspace/indexer.ts` + `store.ts`: `wc_open` completo con
-      caché en disco (§3.3) y `onProgress` → notificaciones de progreso MCP.
+- [ ] **M1.2** `workspace/indexer.ts` + `store.ts` (+ módulo de caché):
+      `store.open`/`listCached`/caché con el pipeline de `wc_open` completo
+      (§3.3) y `onProgress` → notificaciones de progreso MCP. El store recibe
+      `webcrack` inyectable (`deps`) para espiar sin `vi.mock`.
       _Acepta:_ indexar el código de `fixtureWorkspace()` produce el mismo
       `index` que el fixture (test de contrato); reabrir el mismo input no
       vuelve a llamar a `webcrack()`
       (test con spy); el índice coincide en líneas con `module.code`.
-- [ ] **M1.3** `wc_open` + `wc_workspaces` con la ficha de §3.4, incluyendo
-      técnicas de ofuscación detectadas (inferidas de qué pases hicieron cambios
-      o por heurística sobre el original).
+- [ ] **M1.3** `tools/open.ts` (`wc_open` + `wc_workspaces`): solo formato con
+      la ficha de §3.4, incluyendo técnicas de ofuscación detectadas
+      (inferidas de qué pases hicieron cambios o por heurística sobre el
+      original). Usa `store.open`/`listCached` de M1.2 y la lógica
+      compartida `workspace/findings.ts` de M1.7 para el overview.
 - [ ] **M1.4** `workspace/tags.ts` + `wc_map`: etiquetas `network`, `auth`,
       `crypto`, `storage`, `dom`, `vm`, `vendor` (librería conocida). Heurística
       simple y documentada; tests con el corpus.
@@ -289,6 +312,8 @@ pisarse:
 - [ ] **M1.6** `wc_search` con `text`, `regex`, `string`, `identifier`,
       `call`. (El modo `ast` va en M2.5.)
 - [ ] **M1.7** `wc_findings` (todas las categorías de §4) y `wc_goto`.
+      La lógica compartida de findings vive en `workspace/findings.ts`
+      (la usan luego M1.3 para el overview y M3.1 para exportar).
 - [ ] **M1.8** Evaluación v1: `evals/tasks.jsonl` con ≥ 10 tareas sobre
       `packages/webcrack/test/corpus` y `evals/run.ts` que las ejecute con
       `claude -p --mcp-config evals/mcp.json --output-format json` y mida:
