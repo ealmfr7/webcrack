@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, type Config } from './config';
 import { errorResult } from './format/response';
 import { registerAuditPrompt } from './prompts/audit';
+import { registerResources } from './resources/index';
 import { tools } from './tools';
 import type { ToolContext } from './tools/define';
 import { WorkspaceStore } from './workspace/store';
@@ -52,5 +53,6 @@ export function createServer(
   }
 
   registerAuditPrompt(server);
+  registerResources(server, store);
   return server;
 }
