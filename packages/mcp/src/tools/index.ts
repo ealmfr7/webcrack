@@ -12,6 +12,7 @@ import { outline } from './outline';
 import { read } from './read';
 import { refs } from './refs';
 import { search } from './search';
+import { trace } from './trace';
 
 /** In the order an analyst uses them: load, orient, search, navigate, understand, finish. */
 export const tools: ToolDef[] = [
@@ -24,6 +25,7 @@ export const tools: ToolDef[] = [
   read,
   goto,
   refs,
+  trace,
   graph,
   diff,
   deobfuscate,

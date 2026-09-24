@@ -49,13 +49,11 @@ for (const focus of FOCUSES) {
   });
 }
 
-test('every wc_* name in the prompt exists as a tool (wc_trace allowlisted)', async () => {
+test('every wc_* name in the prompt exists as a tool', async () => {
   const { client } = await connect();
   const { tools } = await client.listTools();
   const names = new Set(tools.map((tool) => tool.name));
-  // wc_trace is being added and is not registered yet; mentioning it in the
-  // prompt is intentional, so it is allowlisted here until it lands.
-  const allowlisted = new Set(['wc_trace']);
+  const allowlisted = new Set<string>([]);
   const text = await promptText({ source: 'app.js', focus: 'all' });
   const mentioned = new Set(text.match(/wc_[a-z_]+/g) ?? []);
   expect(mentioned.size).toBeGreaterThan(0);
