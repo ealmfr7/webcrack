@@ -1,6 +1,10 @@
 import { expect, test } from 'vitest';
 import type { Report } from 'webcrack/analysis';
-import { collectFindings, summarizeFindings } from '../src/workspace/findings';
+import {
+  collectFindings,
+  precomputeModuleFindings,
+  summarizeFindings,
+} from '../src/workspace/findings';
 import type { Workspace } from '../src/workspace/types';
 import { connect, fixtureWorkspace } from './helpers';
 
@@ -241,6 +245,52 @@ test('module filter and pagination', async () => {
   await expect(
     call('wc_findings', { category: 'sinks', module: 'src/nope.js' }),
   ).rejects.toThrow('No modules match');
+});
+
+test('mutating module.code yields fresh findings (no stale AST)', () => {
+  const ws = fixtureWorkspace();
+  expect(ws.findings).toBeUndefined();
+  ws.modules.set('main.js', {
+    path: 'main.js',
+    bundleId: '0',
+    isEntry: true,
+    code: 'a && b && c && console.log(1);\neval("x");',
+    tags: [],
+  });
+  expect(
+    collectFindings(ws, 'sinks').map((f) => `${f.module}:${f.line}`),
+  ).toEqual(['main.js:2']);
+  const mod = ws.modules.get('main.js');
+  if (!mod) throw new Error('fixture is missing main.js');
+  // Simulate `wc_deobfuscate apply` (unminify) pushing `eval` down: the
+  // cached AST must not pin the finding to line 2.
+  mod.code = '\n\na && b && c && console.log(1);\neval("x");';
+  expect(
+    collectFindings(ws, 'sinks').map((f) => `${f.module}:${f.line}`),
+  ).toEqual(['main.js:4']);
+});
+
+test('precomputed ws.findings is used instead of parsing', () => {
+  const ws = fixtureWorkspace();
+  ws.findings = precomputeModuleFindings(ws.modules.values());
+  const mod = ws.modules.get('src/sign.js');
+  if (!mod) throw new Error('fixture is missing src/sign.js');
+  const expected = collectFindings(ws, 'crypto', [mod]);
+  expect(expected.map((f) => f.title)).toContain('btoa()');
+  // Rewrite the code to something with entirely different findings: the
+  // query must still serve the precomputed table (no reparse), so the new
+  // `eval` stays invisible and the old `btoa` stays visible.
+  mod.code = 'eval("x");';
+  expect(collectFindings(ws, 'crypto', [mod])).toEqual(expected);
+  expect(collectFindings(ws, 'sinks', [mod])).toEqual([]);
+  expect(summarizeFindings(ws).counts.crypto).toBe(1);
+});
+
+test('a workspace without findings falls back to parsing', () => {
+  const ws = fixtureWorkspace();
+  expect(ws.findings).toBeUndefined();
+  expect(collectFindings(ws, 'crypto').map((f) => f.title)).toContain('btoa()');
+  expect(summarizeFindings(ws).counts).toMatchObject({ crypto: 1 });
 });
 
 test('pure logic: summarizeFindings top order', () => {

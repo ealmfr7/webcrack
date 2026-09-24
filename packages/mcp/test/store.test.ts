@@ -5,6 +5,7 @@ import { afterAll, expect, test } from 'vitest';
 import { webcrack } from 'webcrack';
 import type { Config } from '../src/config';
 import { WcError } from '../src/format/errors';
+import { collectFindings, summarizeFindings } from '../src/workspace/findings';
 import { WorkspaceStore, type StoreDeps } from '../src/workspace/store';
 import { detectTechniques } from '../src/workspace/techniques';
 import type { LoadedSource, WorkspaceIndex } from '../src/workspace/types';
@@ -364,6 +365,186 @@ test('open fills stats.techniques for an obfuscated corpus sample', async () => 
   const { workspace } = await store.open(code, {}, progressRecorder().fn);
   expect(workspace.stats.techniques.length).toBeGreaterThan(0);
   expect(workspace.stats.techniques).toContain('string-array (rotated)');
+});
+
+test('findings.json is written on open and read back on reopen', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, testDeps());
+  const { workspace } = await store.open(
+    'eval("x");',
+    {},
+    progressRecorder().fn,
+  );
+  expect(workspace.findings?.['main.js']?.map((f) => f.title)).toContain(
+    'eval()',
+  );
+  const raw = JSON.parse(
+    await readFile(
+      join(config.cacheDir, workspace.id, 'findings.json'),
+      'utf8',
+    ),
+  ) as unknown;
+  expect(raw).toEqual(workspace.findings);
+
+  const cached = new WorkspaceStore(
+    config,
+    testDeps({
+      webcrack: () => {
+        throw new Error('must come from the disk cache');
+      },
+    }),
+  );
+  const second = await cached.open('eval("x");', {}, progressRecorder().fn);
+  expect(second.cached).toBe(true);
+  expect(second.workspace.findings).toEqual(workspace.findings);
+  expect(
+    collectFindings(second.workspace, 'sinks').map((f) => f.title),
+  ).toContain('eval()');
+});
+
+test('a cache without findings.json still loads and falls back', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, testDeps());
+  const first = await store.open('eval("x");', {}, progressRecorder().fn);
+  expect(first.workspace.findings).toBeDefined();
+  await rm(join(config.cacheDir, first.workspace.id, 'findings.json'));
+  const second = await store.open('eval("x");', {}, progressRecorder().fn);
+  expect(second.cached).toBe(true);
+  expect(second.workspace.findings).toBeUndefined();
+  // Queries parse on demand, so nothing is lost.
+  expect(
+    collectFindings(second.workspace, 'sinks').map((f) => f.title),
+  ).toContain('eval()');
+});
+
+test("commit recomputes the changed module's findings", async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, testDeps());
+  const { workspace } = await store.open(
+    'eval("x");',
+    {},
+    progressRecorder().fn,
+  );
+  expect(workspace.findings?.['main.js']?.map((f) => f.line)).toEqual([1]);
+  const mod = workspace.modules.get('main.js');
+  if (!mod) throw new Error('open did not create main.js');
+  mod.code = '\n\neval("x");';
+  await store.commit(workspace, ['main.js']);
+  expect(workspace.findings?.['main.js']?.map((f) => f.line)).toEqual([3]);
+  expect(collectFindings(workspace, 'sinks').map((f) => f.line)).toEqual([3]);
+  const persisted = JSON.parse(
+    await readFile(
+      join(config.cacheDir, workspace.id, 'findings.json'),
+      'utf8',
+    ),
+  ) as Record<string, Array<{ line: number }>>;
+  expect(persisted['main.js']?.map((f) => f.line)).toEqual([3]);
+});
+
+test('a webcrack parse error becomes an actionable WcError', async () => {
+  const config = await makeConfig();
+  const parseError = Object.assign(new SyntaxError('Unexpected token (1:6)'), {
+    code: 'BABEL_PARSER_SYNTAX_ERROR',
+  });
+  const store = new WorkspaceStore(
+    config,
+    testDeps({ webcrack: () => Promise.reject(parseError) }),
+  );
+  let error: unknown;
+  try {
+    await store.open('not [javascript', {}, progressRecorder().fn);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(WcError);
+  const message = (error as WcError).message;
+  expect(message).toContain('(1:6)');
+  expect(message).toMatch(/javascript/i);
+  expect(message).toMatch(/path or URL/);
+  expect(message).toMatch(/deobfuscate/);
+  expect(store.list()).toEqual([]);
+});
+
+test('a non-parse webcrack failure passes through unwrapped', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(
+    config,
+    testDeps({ webcrack: () => Promise.reject(new Error('boom')) }),
+  );
+  let error: unknown;
+  try {
+    await store.open('var a = 1;', {}, progressRecorder().fn);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).not.toBeInstanceOf(WcError);
+  expect((error as Error).message).toBe('boom');
+});
+
+test('cached reopen + summarize of a ~2 MB bundle stays well under 1 s', async () => {
+  const config = await makeConfig();
+  const MODULE_COUNT = 500;
+  // Realistic module shape: one sink plus ~160 small statements (~4 KB).
+  const filler = Array.from(
+    { length: 165 },
+    (_, j) => `const q${j} = ${j} * 31 + 7;`,
+  ).join('\n');
+  const moduleCodes = Array.from(
+    { length: MODULE_COUNT },
+    (_, i) =>
+      `function f${i}(arg) { return eval("m${i}") + arg; }\nf${i}(1);\n${filler}\n`,
+  );
+  const totalBytes = moduleCodes.reduce((sum, code) => sum + code.length, 0);
+  expect(totalBytes).toBeGreaterThan(2 * 1024 * 1024);
+  const source = moduleCodes.join('\n');
+  const bundleModules = new Map(
+    moduleCodes.map((code, i) => [
+      String(i),
+      {
+        id: String(i),
+        path: `mod${i}.js`,
+        isEntry: i === 0,
+        code,
+      },
+    ]),
+  );
+  const deps = testDeps({
+    loadSource: (): Promise<LoadedSource> =>
+      Promise.resolve({
+        kind: 'code',
+        label: '<synthetic>',
+        code: source,
+        bytes: source.length,
+      }),
+    webcrack: (() =>
+      Promise.resolve({
+        code: source,
+        bundle: { type: 'webpack', entryId: '0', modules: bundleModules },
+        save: () => Promise.resolve(),
+      })) as unknown as StoreDeps['webcrack'],
+  });
+  const store = new WorkspaceStore(config, deps);
+  const first = await store.open(source, {}, progressRecorder().fn);
+  expect(first.workspace.findings).toBeDefined();
+  expect(Object.keys(first.workspace.findings ?? {})).toHaveLength(
+    MODULE_COUNT,
+  );
+
+  const cached = new WorkspaceStore(
+    config,
+    testDeps({
+      webcrack: () => {
+        throw new Error('must come from the disk cache');
+      },
+    }),
+  );
+  const startedAt = Date.now();
+  const second = await cached.open(source, {}, progressRecorder().fn);
+  const summary = summarizeFindings(second.workspace);
+  const elapsedMs = Date.now() - startedAt;
+  expect(second.cached).toBe(true);
+  expect(summary.counts.sinks).toBe(MODULE_COUNT);
+  expect(elapsedMs).toBeLessThan(1000);
 });
 
 test('techniques survive reopening without calling the detector again', async () => {

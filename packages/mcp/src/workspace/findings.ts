@@ -125,19 +125,22 @@ export const AES_SBOX_START: readonly number[] = [0x63, 0x7c, 0x77, 0x7b];
  */
 export const DENSE_BITWISE_THRESHOLD = 8;
 
-// -- On-demand AST parsing (cached per workspace + module) -------------------
+// -- On-demand AST parsing (cached per module entry) --------------------------
+//
+// The cache is keyed by the `ModuleEntry` OBJECT (not `ws` + path) and stores
+// the code it was parsed from: when a tool rewrites `module.code` in place
+// (e.g. `wc_deobfuscate apply`), the next query reparses instead of serving
+// the stale tree.
 
-const astCache = new WeakMap<Workspace, Map<string, ParseResult<t.File>>>();
+const astCache = new WeakMap<
+  ModuleEntry,
+  { code: string; ast: ParseResult<t.File> | undefined }
+>();
 
-function moduleAst(ws: Workspace, module: ModuleEntry): t.File | undefined {
-  let perWs = astCache.get(ws);
-  if (!perWs) {
-    perWs = new Map();
-    astCache.set(ws, perWs);
-  }
-  const cached = perWs.get(module.path);
-  if (cached !== undefined) return cached;
-  let ast: ParseResult<t.File>;
+function moduleAst(module: ModuleEntry): t.File | undefined {
+  const cached = astCache.get(module);
+  if (cached !== undefined && cached.code === module.code) return cached.ast;
+  let ast: ParseResult<t.File> | undefined;
   try {
     ast = parse(module.code, {
       sourceType: 'unambiguous',
@@ -146,9 +149,9 @@ function moduleAst(ws: Workspace, module: ModuleEntry): t.File | undefined {
       plugins: ['jsx'],
     });
   } catch {
-    return undefined;
+    ast = undefined;
   }
-  perWs.set(module.path, ast);
+  astCache.set(module, { code: module.code, ast });
   return ast;
 }
 
@@ -324,8 +327,8 @@ function isStringArg(
   );
 }
 
-function collectFromAst(ws: Workspace, mod: ModuleEntry): Finding[] {
-  const ast = moduleAst(ws, mod);
+function collectFromAst(mod: ModuleEntry): Finding[] {
+  const ast = moduleAst(mod);
   if (!ast) return [];
   const findings: Finding[] = [];
   const seen = new Set<string>();
@@ -509,8 +512,36 @@ function collectFromAst(ws: Workspace, mod: ModuleEntry): Finding[] {
 // -- Public API --------------------------------------------------------------
 
 /**
+ * AST-based findings (`sinks`/`storage`/`crypto`) for one module, parsed on
+ * demand (and cached per entry — see `moduleAst`). Exported so the store can
+ * precompute and refresh `Workspace.findings` without going through a
+ * workspace.
+ */
+export function collectModuleAstFindings(mod: ModuleEntry): Finding[] {
+  return collectFromAst(mod);
+}
+
+/**
+ * Precomputed AST-based findings for every module, keyed by module path —
+ * the shape stored on `Workspace.findings` and in `findings.json`.
+ * "Process once, query many": `open`/`commit` compute this, queries read it.
+ */
+export function precomputeModuleFindings(
+  modules: Iterable<ModuleEntry>,
+): Record<string, Finding[]> {
+  const out: Record<string, Finding[]> = {};
+  for (const mod of modules) out[mod.path] = collectFromAst(mod);
+  return out;
+}
+
+/**
  * Collect findings of one category. `modules` defaults to every module in
  * workspace order; results are in module order, then source (line) order.
+ *
+ * AST categories (`sinks`/`storage`/`crypto`) read `ws.findings` when
+ * present (a module missing from it — e.g. added without a `commit` — is
+ * parsed on demand); workspaces without it (old disk caches,
+ * hand-built fixtures) fall back to parsing every module.
  */
 export function collectFindings(
   ws: Workspace,
@@ -530,9 +561,9 @@ export function collectFindings(
     case 'crypto': {
       const findings: Finding[] = [];
       for (const mod of mods) {
-        findings.push(
-          ...collectFromAst(ws, mod).filter((f) => f.category === category),
-        );
+        const precomputed = ws.findings?.[mod.path];
+        const all = precomputed ?? collectFromAst(mod);
+        findings.push(...all.filter((f) => f.category === category));
       }
       // Already in module order, then source order (Babel enter order).
       return findings;
