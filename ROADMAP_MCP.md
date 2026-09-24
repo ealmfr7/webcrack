@@ -317,7 +317,7 @@ pisarse:
       vuelve a llamar a `webcrack()`
       (test con spy); el índice coincide en líneas con `module.code` y cada
       array del índice va en orden de fuente.
-- [ ] **M1.3** `tools/open.ts` (`wc_open` + `wc_workspaces`): solo formato con
+- [x] **M1.3** `tools/open.ts` (`wc_open` + `wc_workspaces`): solo formato con
       la ficha de §3.4, incluyendo técnicas de ofuscación detectadas
       (inferidas de qué pases hicieron cambios o por heurística sobre el
       original). Usa `store.open`/`listCached` de M1.2 y la lógica
