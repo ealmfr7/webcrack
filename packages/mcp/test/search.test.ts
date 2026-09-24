@@ -79,6 +79,20 @@ describe('wc_search kinds', () => {
     expect(exact).toContain('src/sign.js:1');
   });
 
+  test('identifier substring matching is case-insensitive', async () => {
+    const text = await search({ query: 'SIGN', kind: 'identifier' });
+    expect(text).toContain('src/api.js:1');
+    expect(text).toContain('src/sign.js:1');
+    expect(text).toContain('src/api.js:5');
+  });
+
+  test('identifier quoted query stays exact and case-sensitive', async () => {
+    const exact = await search({ query: '"sign"', kind: 'identifier' });
+    expect(exact).toContain('src/sign.js:1');
+    const upper = await search({ query: '"SIGN"', kind: 'identifier' });
+    expect(upper).toContain('No matches');
+  });
+
   test('call matches dotted names with * wildcards', async () => {
     const dotted = await search({
       query: 'localStorage.*',
