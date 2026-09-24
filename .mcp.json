@@ -3,7 +3,12 @@
     "webcrack": {
       "command": "node",
       "args": ["packages/mcp/dist/index.js"],
-      "env": { "WEBCRACK_MCP_ROOTS": "." }
+      "env": {
+        "WEBCRACK_MCP_ROOTS": ".",
+        "WEBCRACK_MCP_MAX_INPUT": "20mb",
+        "WEBCRACK_MCP_TIMEOUT_MS": "120000",
+        "WEBCRACK_MCP_OUTPUT_BUDGET": "20000"
+      }
     }
   }
 }
