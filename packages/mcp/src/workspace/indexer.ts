@@ -1118,11 +1118,13 @@ function collectUsages(state: WalkState, ast: File): void {
         return;
       }
       if (parent.type === 'ExportSpecifier') {
-        // `export { x }` reads the local binding; names re-exported from
-        // another module (`export { x } from`) belong to that module.
-        const decl = path.parentPath?.parentPath?.node;
-        if (decl?.type === 'ExportNamedDeclaration' && decl.source) return;
-        if (key !== 'local') return;
+        // Neither side of an export specifier is a use: local specifiers
+        // (`export { x }`, `export { x as y }`) only re-name an
+        // already-defined binding — including the `export { newName as x }`
+        // form `wc_annotate` leaves behind after a rename — and names
+        // re-exported from another module (`export { x } from …`) belong
+        // to that module.
+        return;
       }
 
       // Ascend a member chain whose object is this identifier: a chain on

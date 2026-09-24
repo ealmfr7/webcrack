@@ -338,7 +338,9 @@ describe('wc_refs callees', () => {
         ws.index.symbols.find(
           (s) => s.module === 'src/sign.js' && s.name === 'renamedFn',
         ),
-      ).toMatchObject({ refCount: 2 });
+        // The importer call only: the kept `export { renamedFn as sign }`
+        // alias is not a ref.
+      ).toMatchObject({ refCount: 1 });
 
       // User-visible through the tools: the importer's call still resolves
       // to the renamed definition, and the definition reads back.
@@ -362,17 +364,36 @@ describe('wc_refs callees', () => {
 
       const text = await call('wc_refs', { symbol: 'renamedFn' });
       expect(text).toContain(
-        '`renamedFn` defined at src/sign.js:1 (function, exported) — 4 callers',
+        '`renamedFn` defined at src/sign.js:1 (function, exported) — 3 callers',
       );
-      expect(text).toContain('Callers of `renamedFn` (4):');
+      expect(text).toContain('Callers of `renamedFn` (3):');
       // Named import, still using the kept `sign` alias.
       expect(text).toContain('src/api.js:5  call  in login');
       // Namespace import, still `ns.sign(v)`.
       expect(text).toContain('src/ns.js:3  call  in verify');
       // Same-module caller, renamed to `renamedFn(v)`.
       expect(text).toContain('src/sign.js:5  call  in verifyLocal');
-      // The kept export alias itself references the renamed binding.
-      expect(text).toContain('src/sign.js:7  read');
+      // The kept `export { renamedFn as sign };` alias (line 7) is not a
+      // use, so it is not listed.
+      expect(text).not.toContain('src/sign.js:7');
+    });
+
+    test('the kept export alias is not listed as a caller', async () => {
+      const ws = withRenameCallers();
+      const { call } = await connectReal(ws);
+
+      await call('wc_annotate', {
+        symbol: 'src/sign.js:sign',
+        name: 'renamedFn',
+      });
+
+      const text = await call('wc_refs', { symbol: 'renamedFn' });
+      // Only genuine uses: the named and namespace importers plus the
+      // same-module call.
+      expect(text).toContain('src/api.js:5  call  in login');
+      expect(text).toContain('src/ns.js:3  call  in verify');
+      expect(text).toContain('src/sign.js:5  call  in verifyLocal');
+      expect(text).not.toContain('src/sign.js:7');
     });
   });
 
