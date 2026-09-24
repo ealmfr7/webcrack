@@ -242,11 +242,16 @@ describe('wc_deobfuscate', () => {
 
   test('apply mutates the code, rebuilds the index and rewrites the cache', async () => {
     const buildIndexCalls: unknown[] = [];
+    const tagModuleCalls: unknown[] = [];
     const { call, store, config } = await setup({
       webcrack: fakeWebcrack((code) => code.replace('!0', 'true')),
       buildIndex: (modules: unknown) => {
         buildIndexCalls.push(modules);
         return EMPTY_INDEX;
+      },
+      tagModule: (module, index) => {
+        tagModuleCalls.push([module, index]);
+        return ['network'];
       },
     });
     const text = await call('wc_deobfuscate', {
@@ -256,11 +261,21 @@ describe('wc_deobfuscate', () => {
     expect(text).toContain('applied; reindexed; cache updated');
     expect(text).toContain('Next: wc_read obf.js');
 
-    const module = store.get('deob1').modules.get('obf.js');
+    const ws = store.get('deob1');
+    const module = ws.modules.get('obf.js');
     expect(module?.code).toContain('var flag = true;');
     expect(module?.code).toContain('var seq = (1, 2, 3);');
     expect(module?.code).toContain('function greet() {');
+    // store.commit reindexed (via the injected buildIndex spy) …
     expect(buildIndexCalls).toHaveLength(1);
+    // … refreshed the report and tags for the changed module …
+    expect(ws.report['obf.js']).toBeDefined();
+    expect(tagModuleCalls).toHaveLength(1);
+    expect(module?.tags).toContain('network');
+    // … and left interpreters consistent (no VM in this fixture).
+    expect(
+      ws.interpreters.filter((info) => info.module === 'obf.js'),
+    ).toHaveLength(0);
 
     const cached = await readFile(
       join(config.cacheDir, 'deob1', 'modules', 'obf.js'),
@@ -326,6 +341,16 @@ describe('wc_deobfuscate', () => {
     const text = await call('wc_deobfuscate', { expression: '1 + 1' });
     expect(text).toContain('expression in (no module) (sandbox)');
     expect(text).toContain('```\n2\n```');
+  });
+
+  test('expression without a target emits no invalid Next hint', async () => {
+    const { call } = await setup({});
+    const text = await call('wc_deobfuscate', { expression: '1 + 1' });
+    // The body label may say "(no module)", but the Next line must not
+    // point at a module that does not exist.
+    expect(text).not.toMatch(/\nNext:.*\(no module\)/);
+    expect(text).not.toContain('wc_read (no module)');
+    expect(text).not.toContain('wc_annotate (no module)');
   });
 
   test('an injected expression is rejected', async () => {

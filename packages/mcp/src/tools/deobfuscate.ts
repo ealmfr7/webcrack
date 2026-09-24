@@ -1,26 +1,11 @@
 import { parse } from '@babel/parser';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import {
-  createNodeSandbox,
-  detectInterpreters,
-  extractReport,
-} from 'webcrack/analysis';
-import type { InterpreterInfo } from 'webcrack/analysis';
+import { createNodeSandbox } from 'webcrack/analysis';
 import { WcError } from '../format/errors';
 import { textResult } from '../format/response';
 import { resolveTarget } from '../format/target';
-import { writeWorkspaceToCache } from '../workspace/cache';
 import { evaluateInModule } from '../workspace/sandbox';
-import type {
-  InterpreterSummary,
-  ModuleEntry,
-  ModuleIndex,
-  Workspace,
-  WorkspaceIndex,
-} from '../workspace/types';
+import type { ModuleEntry, Workspace } from '../workspace/types';
 import { defineTool, workspaceArg } from './define';
 
 const PASS_NAMES = [
@@ -33,39 +18,6 @@ const PASS_NAMES = [
 
 /** Used when `passes` is omitted. */
 const DEFAULT_PASSES: readonly string[] = ['deobfuscate', 'unminify'];
-
-/** webcrack release recorded in the cache, same lookup as `store.ts`. */
-function resolveWebcrackVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    let dir = dirname(require.resolve('webcrack'));
-    for (let depth = 0; depth < 6; depth++) {
-      try {
-        const data: unknown = JSON.parse(
-          readFileSync(join(dir, 'package.json'), 'utf8'),
-        );
-        if (
-          typeof data === 'object' &&
-          data !== null &&
-          (data as { name?: unknown }).name === 'webcrack' &&
-          typeof (data as { version?: unknown }).version === 'string'
-        ) {
-          return (data as { version: string }).version;
-        }
-      } catch {
-        // Not a readable package.json here; keep walking up.
-      }
-      const parent = dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  } catch {
-    // Unresolvable (e.g. dist not built); fall through to 'unknown'.
-  }
-  return 'unknown';
-}
-
-const WEBCRACK_VERSION = resolveWebcrackVersion();
 
 /** Like the `withTimeout` in `store.ts`: webcrack is not cancellable, so the
  * timeout only stops waiting for it. */
@@ -282,51 +234,6 @@ function unifiedDiff(before: string[], after: string[]): string[] {
   return out;
 }
 
-function bindingName(binding: InterpreterInfo['pc']): string | undefined {
-  const identifier = binding?.identifier;
-  return identifier?.type === 'Identifier' ? identifier.name : undefined;
-}
-
-/** Same summary mapping as `store.ts`. */
-function toInterpreterSummary(
-  module: string,
-  info: InterpreterInfo,
-): InterpreterSummary {
-  const startLine = info.loop.node.loc?.start.line ?? 1;
-  const summary: InterpreterSummary = {
-    module,
-    line: startLine,
-    endLine: info.loop.node.loc?.end.line ?? startLine,
-    dispatchKind: info.dispatchKind,
-    handlerCount: info.handlers.length,
-  };
-  const pc = bindingName(info.pc);
-  const bytecode = bindingName(info.bytecode);
-  const stack = bindingName(info.stack);
-  if (pc !== undefined) summary.pc = pc;
-  if (bytecode !== undefined) summary.bytecode = bytecode;
-  if (stack !== undefined) summary.stack = stack;
-  return summary;
-}
-
-/** Same per-module index projection as `store.ts`. */
-function sliceIndex(index: WorkspaceIndex, modulePath: string): ModuleIndex {
-  return {
-    symbols: index.symbols.filter((entry) => entry.module === modulePath),
-    calls: index.calls.filter((entry) => entry.module === modulePath),
-    strings: index.strings.filter((entry) => entry.module === modulePath),
-    refs: index.refs.filter((entry) => entry.module === modulePath),
-    imports: index.imports[modulePath] ?? [],
-    reexports: index.reexports
-      .filter((entry) => entry.module === modulePath)
-      .map((entry) => ({
-        name: entry.name,
-        importedName: entry.importedName,
-        from: entry.from,
-      })),
-  };
-}
-
 export const deobfuscate = defineTool({
   name: 'wc_deobfuscate',
   title: 'Deobfuscate region',
@@ -384,10 +291,13 @@ export const deobfuscate = defineTool({
       const body =
         `expression in ${moduleLabel} (sandbox)\n` +
         `\`\`\`\n${result}\n\`\`\``;
-      return textResult(body, {
-        budget: ctx.config.outputBudget,
-        next: [`wc_read ${moduleLabel}`, `wc_annotate ${moduleLabel}:<name>`],
-      });
+      // Without a target there is no module to point at, so omit the Next
+      // hints rather than emitting an invalid `wc_read (no module)`.
+      const next =
+        args.target !== undefined
+          ? [`wc_read ${moduleLabel}`, `wc_annotate ${moduleLabel}:<name>`]
+          : undefined;
+      return textResult(body, { budget: ctx.config.outputBudget, next });
     }
     if (args.target === undefined) {
       throw new WcError(
@@ -441,27 +351,7 @@ export const deobfuscate = defineTool({
         ...cleanLines,
         ...moduleLines.slice(end),
       ].join('\n');
-      ws.index = ctx.store.deps.buildIndex(ws.modules);
-      const ast = parse(entry.code, {
-        sourceType: 'unambiguous',
-        allowReturnOutsideFunction: true,
-        errorRecovery: true,
-        plugins: ['jsx'],
-      });
-      ws.report[entry.path] = extractReport(ast);
-      ws.interpreters = [
-        ...ws.interpreters.filter((info) => info.module !== entry.path),
-        ...detectInterpreters(ast).map((info) =>
-          toInterpreterSummary(entry.path, info),
-        ),
-      ];
-      const tags = ctx.store.deps.tagModule(
-        entry,
-        sliceIndex(ws.index, entry.path),
-      );
-      const hasVm = ws.interpreters.some((info) => info.module === entry.path);
-      entry.tags = hasVm && !tags.includes('vm') ? [...tags, 'vm'] : tags;
-      await writeWorkspaceToCache(ctx.config, ws, WEBCRACK_VERSION);
+      await ctx.store.commit(ws, [entry.path]);
       body += '\napplied; reindexed; cache updated';
     }
 
