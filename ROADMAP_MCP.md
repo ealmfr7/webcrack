@@ -121,26 +121,41 @@ exactamente con lo que devuelve `wc_read`. Contenido:
 - **symbols**: funciones, clases, métodos, variables de nivel superior,
   imports; con `module`, `name`, `kind`, `line`, `endLine`, `params`, `exported`.
   Sin kind `export`: el flag `exported` lo cubre. `refCount` = nº de refs cuyo
-  `defModule`/`defLine`/`name` coinciden, incluyendo refs cruzadas vía imports.
+  `defModule`/`defLine`/`name` coinciden, incluyendo refs cruzadas vía imports;
+  solo definido tras `linkIndex`. Reglas de nombrado: los métodos se llaman
+  `Class.method` (con punto); `const f = () => {}` / `const f = function () {}`
+  son kind `function` con `params` y cuentan como función nombrada para
+  `caller`; `export default function () {}` y una clase anónima se llaman
+  `default`; CJS `const x = require('./x.js')` es kind `import` con
+  `importedName: '*'` y `from`; `module.exports.x = …` / `exports.x = …` marca
+  `exported` en `x` (o crea un símbolo variable `x`).
 - **refs** (`RefEntry[]`): usos de bindings de nivel de módulo (definidos o
   importados), con `module`, `line`, `name`, `defModule?`, `defLine?`, `kind`
   (`read`|`write`|`call`). `indexModule` deja SIN resolver las refs a bindings
   importados (sin `defModule`/`defLine`); `linkIndex` las resuelve al módulo
-  exportador. Declaraciones e import-specifiers NO son refs; usos de globales
-  y locales tampoco (los call sites los cubren `calls`).
-- **imports/exports** entre módulos. Los grafos (`wc_graph`, M2.2) se
-  construyen a query time desde `index.imports`/`index.calls`; NO se cachean
+  exportador. Declaraciones e import-specifiers NO son refs; los globales nunca
+  son refs y los usos de locales tampoco (los call sites los cubren `calls`).
+  Acceso a miembro sobre un namespace import (`ns.sign`) → ref al símbolo
+  exportado (`defModule`/`defLine` tras linkear), con `name` punteado.
+- **imports/exports** entre módulos: los bindings import llevan
+  `importedName` (`'default'` | `'*'` | nombre) y `from` (ruta resuelta); los
+  barrels van en `index.reexports` (`{name, importedName, from}`, y con
+  `module` en `WorkspaceIndex`). Los grafos (`wc_graph`, M2.2) se construyen
+  a query time desde `index.imports`/`index.calls`; NO se cachean
   `moduleGraph`/`callGraph` (necesitan AST/Bundle, no disponibles en caché).
 - **strings**: literales con posición (para `wc_search kind=string`),
   INCLUYENDO sources de import/require y EXCLUYENDO keys de objetos.
 - **calls**: nombre de callee normalizado con posición. Raíz global o binding
   importado → nombre punteado (`fetch`, `axios.post`, `sign`,
-  `localStorage.setItem`); raíz local u otra expresión → `*.<prop>`
+  `localStorage.setItem`); acceso a miembro sobre namespace import → punteado
+  (`ns.sign()` → `ns.sign`); raíz local u otra expresión → `*.<prop>`
   (`(await res.json())` → `*.json`). `caller` = función nombrada envolvente
   más cercana.
 - **tags** por módulo (ver M1.4).
 
-Todo el índice debe ser serializable (JSON) para la caché.
+Todo el índice debe ser serializable (JSON) para la caché. Cada array del
+índice va en orden de fuente (`calls` en orden de entrada de Babel). Las
+claves de módulo son rutas webcrack sin el `./` inicial.
 
 ### 3.3 Caché
 
@@ -183,8 +198,10 @@ Todas llevan prefijo `wc_`. `workspace` es opcional en todas: si se omite se
 usa el último abierto. Anotaciones MCP (`readOnlyHint`, etc.) donde aplique.
 Los formatos `target` (`módulo`, `módulo:línea`, `módulo:inicio-fin`,
 `módulo:símbolo`, `símbolo`) y `symbol` se resuelven con el helper compartido
-`format/target.ts` (`parseTarget`, `resolveModule`, `resolveSymbol`): nadie
-reimplementa ese parseo en su tool.
+`format/target.ts`: `resolveTarget` es el punto de entrada único (usado por
+`wc_read`, `wc_goto`, `wc_refs` y `wc_deobfuscate`), construido sobre
+`parseTarget`, `resolveModule` y `resolveSymbol`. Nadie reimplementa ese
+parseo en su tool.
 
 | Tool             | Entrada (resumen)                                                                                                                        | Devuelve                                                                        |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -298,7 +315,8 @@ pisarse:
       _Acepta:_ indexar el código de `fixtureWorkspace()` produce el mismo
       `index` que el fixture (test de contrato); reabrir el mismo input no
       vuelve a llamar a `webcrack()`
-      (test con spy); el índice coincide en líneas con `module.code`.
+      (test con spy); el índice coincide en líneas con `module.code` y cada
+      array del índice va en orden de fuente.
 - [ ] **M1.3** `tools/open.ts` (`wc_open` + `wc_workspaces`): solo formato con
       la ficha de §3.4, incluyendo técnicas de ofuscación detectadas
       (inferidas de qué pases hicieron cambios o por heurística sobre el
