@@ -7,19 +7,25 @@ import type {
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { afterAll, expect, test } from 'vitest';
 import { webcrack } from 'webcrack';
+import { extractReport } from 'webcrack/analysis';
 import { loadConfig, type Config } from '../src/config';
 import { createServer } from '../src/server';
+import { writeWorkspaceToCache } from '../src/workspace/cache';
 import { loadSource } from '../src/workspace/loader';
 import { buildIndex } from '../src/workspace/indexer';
 import { tagModule } from '../src/workspace/tags';
 import { WorkspaceStore, type StoreDeps } from '../src/workspace/store';
-import type { ModuleEntry, WorkspaceIndex } from '../src/workspace/types';
+import type {
+  ModuleEntry,
+  Workspace,
+  WorkspaceIndex,
+} from '../src/workspace/types';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterAll(async () => {
@@ -122,11 +128,18 @@ function realIndexerAvailable(): boolean {
   }
 }
 
-async function setup(deps: StoreDeps = e2eDeps()) {
-  const cacheDir = await mkdtemp(join(tmpdir(), 'wc-open-test-'));
-  cleanups.push(() => rm(cacheDir, { recursive: true, force: true }));
+async function setup(
+  deps: StoreDeps = e2eDeps(),
+  reuseCacheDir?: string,
+  roots: string = corpusDir(),
+) {
+  const cacheDir =
+    reuseCacheDir ?? (await mkdtemp(join(tmpdir(), 'wc-open-test-')));
+  if (reuseCacheDir === undefined) {
+    cleanups.push(() => rm(cacheDir, { recursive: true, force: true }));
+  }
   const config: Config = loadConfig({
-    WEBCRACK_MCP_ROOTS: corpusDir(),
+    WEBCRACK_MCP_ROOTS: roots,
     WEBCRACK_MCP_CACHE: cacheDir,
   });
   const store = new WorkspaceStore(config, deps);
@@ -274,6 +287,136 @@ test('wc_workspaces shows cached workspaces from a fresh store', async () => {
   expect(text).toContain('"<code>"');
   expect(text).toContain('Next: wc_open');
 }, 60_000);
+
+test('a cached workspace reopens by id from a fresh store', async () => {
+  const first = await setup();
+  const opened = await first.call('wc_open', { source: LITERAL });
+  const id = /^Workspace ([0-9a-f]{8})/.exec(opened)?.[1];
+  expect(id).toBeDefined();
+  // A new session over the same cache dir: the store is empty, but the id
+  // still reopens the cached workspace.
+  const second = await setup(e2eDeps(), first.config.cacheDir);
+  const text = await second.call('wc_open', { source: id });
+  expect(text).toContain(`Workspace ${id} · script`);
+  expect(text).toContain('(cached)');
+  // The reopened workspace is fully usable.
+  const read = await second.call('wc_read', {
+    target: 'main.js',
+    workspace: id,
+  });
+  expect(read).toContain('fetch');
+  const other = await second.call('wc_open', {
+    source: 'console.log("other");\n',
+  });
+  const otherId = /^Workspace ([0-9a-f]{8})/.exec(other)?.[1];
+  expect(otherId).toBeDefined();
+  const diff = await second.call('wc_diff', { a: id, b: otherId });
+  expect(diff).toContain('1 changed');
+}, 60_000);
+
+test('an unknown 8-hex id is an actionable error, not literal code', async () => {
+  const { callRaw, store } = await setup();
+  const result = await callRaw('wc_open', { source: 'deadbeef' });
+  expect(result.isError).toBe(true);
+  const text = result.content
+    .map((part) => (part.type === 'text' ? part.text : ''))
+    .join('\n');
+  expect(text).toContain('Unknown workspace "deadbeef"');
+  expect(text).toContain('wc_workspaces');
+  // No junk workspace was opened from the id-as-code.
+  expect(store.list()).toHaveLength(0);
+});
+
+test('an 8-hex file name keeps normal handling', async () => {
+  // Relative paths resolve against the cwd (like the loader), so the file
+  // must live there; roots point at the cwd so it is openable. The file is
+  // removed afterwards and never committed.
+  const name = join(process.cwd(), 'abcdef12');
+  await writeFile(name, 'console.log("hex name");\n', 'utf8');
+  cleanups.push(() => unlink(name).catch(() => {}));
+  const { call } = await setup(e2eDeps(), undefined, process.cwd());
+  try {
+    const text = await call('wc_open', { source: 'abcdef12' });
+    expect(text).toMatch(/^Workspace [0-9a-f]{8} · script · 1 module/);
+    expect(text).not.toContain('(cached)');
+  } finally {
+    await unlink(name).catch(() => {});
+  }
+}, 60_000);
+
+test('wc_workspaces suggests wc_open <id> for cached entries', async () => {
+  const first = await setup();
+  const opened = await first.call('wc_open', { source: LITERAL });
+  const id = /^Workspace ([0-9a-f]{8})/.exec(opened)?.[1];
+  expect(id).toBeDefined();
+  const second = await setup(e2eDeps(), first.config.cacheDir);
+  const text = await second.call('wc_workspaces', {});
+  expect(text).toContain('Cached:');
+  const next = text.split('\n').find((line) => line.startsWith('Next:'));
+  expect(next).toBe(`Next: wc_open ${id}`);
+}, 60_000);
+
+test('overview renders fast for 2,000 modules × 100 calls', async () => {
+  const first = await setup();
+  const tags = [
+    'network',
+    'auth',
+    'crypto',
+    'storage',
+    'dom',
+    'vm',
+    'vendor',
+  ] as const;
+  const modules = new Map<string, ModuleEntry>();
+  const calls: WorkspaceIndex['calls'] = [];
+  const report: Workspace['report'] = {};
+  for (let i = 0; i < 2000; i++) {
+    const path = `m${i}.js`;
+    const code = 'var a = 1;\n';
+    modules.set(path, {
+      path,
+      bundleId: String(i),
+      isEntry: i === 0,
+      code,
+      tags: [...tags],
+    });
+    for (let j = 0; j < 100; j++) {
+      calls.push({ module: path, line: 1, callee: 'fetch' });
+    }
+    const ast = parse(code, {
+      sourceType: 'unambiguous',
+      allowReturnOutsideFunction: true,
+      errorRecovery: true,
+    });
+    report[path] = extractReport(ast);
+  }
+  const workspace: Workspace = {
+    id: 'aaaaaaaa',
+    source: { kind: 'code', label: '<code>', bytes: 1 },
+    original: 'var a = 1;\n',
+    modules,
+    index: {
+      symbols: [],
+      calls,
+      strings: [],
+      refs: [],
+      imports: {},
+      reexports: [],
+    },
+    report,
+    interpreters: [],
+    annotations: [],
+    stats: { openMs: 5, techniques: [] },
+  };
+  await writeWorkspaceToCache(first.config, workspace, 'test');
+  const second = await setup(e2eDeps(), first.config.cacheDir);
+  const start = Date.now();
+  const text = await second.call('wc_open', { source: 'aaaaaaaa' });
+  const elapsed = Date.now() - start;
+  expect(text).toContain('Workspace aaaaaaaa · script · 2000 modules');
+  expect(text).toContain('m0.js (100 calls)');
+  expect(elapsed).toBeLessThan(8000);
+}, 120_000);
 
 test('progress notifications arrive when a progressToken is sent', async () => {
   const { callRaw } = await setup();
