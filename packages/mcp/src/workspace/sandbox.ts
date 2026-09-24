@@ -1,4 +1,7 @@
+import generate from '@babel/generator';
 import { parse, parseExpression } from '@babel/parser';
+import traverse from '@babel/traverse';
+import * as t from '@babel/types';
 import { createNodeSandbox } from 'webcrack/analysis';
 import { WcError } from '../format/errors';
 
@@ -20,9 +23,10 @@ const MAX_RESULT_CHARS = 10_000;
 
 /**
  * Evaluate `expression` with the module `code` in scope, inside an
- * isolated-vm sandbox. The module runs with `module`/`exports`, a stub
- * `require`, and `window`/`self` aliases; a throwing module does not stop
- * the expression. The result is always returned as a string.
+ * isolated-vm sandbox. The module runs with `module`/`exports`, stub
+ * `require`/`__req` (returning `{}`), and `window`/`self` aliases; ESM
+ * syntax is transpiled to script form first, and a throwing module does not
+ * stop the expression. The result is always returned as a string.
  */
 export async function evaluateInModule(
   code: string,
@@ -31,9 +35,10 @@ export async function evaluateInModule(
 ): Promise<string> {
   validateExpression(expression);
   const safe = sanitizeModuleCode(code);
+  const runnable = tryTranspileEsm(safe) ?? safe;
   const script = [
-    'var module={exports:{}},exports=module.exports,require=function(){return {}},window=globalThis,self=globalThis;',
-    `try{\n${safe}\n}catch(e){};`,
+    'var module={exports:{}},exports=module.exports,require=function(){return {}},__req=require,window=globalThis,self=globalThis;',
+    `try{\n${runnable}\n}catch(e){};`,
     `(function(){try{var r=(${expression});return typeof r==='string'?r:(JSON.stringify(r)??String(r))}catch(e){return 'Error: '+e}})()`,
   ].join('');
   const factory = opts.sandboxFactory ?? createNodeSandbox;
@@ -79,6 +84,190 @@ function hasUnterminatedBlockComment(code: string): boolean {
       error instanceof Error && /unterminated comment/i.test(error.message)
     );
   }
+}
+
+/**
+ * Rewrite ESM syntax into script form so the module can be spliced into the
+ * classic-script wrapper: imports become `var` bindings over the `__req`
+ * stub (bare `import 'm'` is dropped), exports become `module.exports`
+ * assignments (`export … from` is dropped), and `import.meta` becomes `{}`.
+ * Exported `const`/`let`/`class` become `var` so the expression can see the
+ * binding outside the wrapper's `try` block. Returns `undefined` when the
+ * code has no ESM syntax or the rewrite fails; callers splice the raw code.
+ */
+function tryTranspileEsm(code: string): string | undefined {
+  let ast: t.File;
+  try {
+    ast = parse(code, {
+      sourceType: 'module',
+      allowImportExportEverywhere: true,
+    });
+  } catch {
+    return undefined;
+  }
+  let touched = false;
+  try {
+    traverse(ast, {
+      ImportDeclaration(path) {
+        touched = true;
+        const source = path.node.source.value;
+        const bindings = path.node.specifiers.map((specifier) => {
+          if (
+            t.isImportDefaultSpecifier(specifier) ||
+            t.isImportNamespaceSpecifier(specifier)
+          ) {
+            return stubBinding(specifier.local.name, requireCall(source));
+          }
+          const imported = specifier.imported;
+          return stubBinding(
+            specifier.local.name,
+            t.memberExpression(
+              requireCall(source),
+              imported,
+              t.isStringLiteral(imported),
+            ),
+          );
+        });
+        if (bindings.length === 0) path.remove();
+        else path.replaceWithMultiple(bindings);
+      },
+      ExportNamedDeclaration(path) {
+        touched = true;
+        const { node } = path;
+        if (node.source !== null || node.declaration == null) {
+          // `export … from 'm'` re-exports another module: drop it.
+          // `export {a as b}` reads locals, so keep it as assignments.
+          const assignments: t.ExpressionStatement[] = [];
+          if (node.source === null) {
+            for (const specifier of node.specifiers) {
+              if (t.isExportSpecifier(specifier)) {
+                assignments.push(
+                  exportAssignment(specifier.exported, specifier.local.name),
+                );
+              }
+            }
+          }
+          if (assignments.length === 0) path.remove();
+          else path.replaceWithMultiple(assignments);
+          return;
+        }
+        const declaration = node.declaration;
+        if (t.isVariableDeclaration(declaration)) {
+          const names = declaration.declarations.flatMap((declarator) =>
+            Object.keys(t.getBindingIdentifiers(declarator.id)),
+          );
+          declaration.kind = 'var';
+          path.replaceWithMultiple([
+            declaration,
+            ...names.map((name) => exportAssignment(t.identifier(name), name)),
+          ]);
+          return;
+        }
+        if (t.isFunctionDeclaration(declaration) && declaration.id) {
+          const id = declaration.id;
+          path.replaceWithMultiple([
+            declaration,
+            exportAssignment(t.cloneNode(id), id.name),
+          ]);
+          return;
+        }
+        if (t.isClassDeclaration(declaration) && declaration.id) {
+          const id = declaration.id;
+          // A block-scoped class would be invisible to the expression, so
+          // bind it with `var` instead of keeping the declaration.
+          path.replaceWithMultiple([
+            stubBinding(
+              id.name,
+              t.classExpression(
+                t.cloneNode(id),
+                declaration.superClass,
+                declaration.body,
+                declaration.decorators ?? undefined,
+              ),
+            ),
+            exportAssignment(t.cloneNode(id), id.name),
+          ]);
+          return;
+        }
+        // Unreachable for plain JS (every declaration above is handled).
+        path.remove();
+      },
+      ExportDefaultDeclaration(path) {
+        touched = true;
+        const declaration = path.node.declaration;
+        if (
+          (t.isFunctionDeclaration(declaration) ||
+            t.isClassDeclaration(declaration)) &&
+          declaration.id
+        ) {
+          const id = declaration.id;
+          path.replaceWithMultiple([
+            declaration,
+            exportAssignment(t.identifier('default'), id.name),
+          ]);
+          return;
+        }
+        path.replaceWith(
+          exportAssignment(
+            t.identifier('default'),
+            declaration as t.Expression,
+          ),
+        );
+      },
+      ExportAllDeclaration(path) {
+        touched = true;
+        path.remove();
+      },
+      MetaProperty(path) {
+        if (
+          path.node.meta.name === 'import' &&
+          path.node.property.name === 'meta'
+        ) {
+          touched = true;
+          path.replaceWith(t.objectExpression([]));
+        }
+      },
+    });
+  } catch {
+    return undefined;
+  }
+  if (!touched) return undefined;
+  try {
+    return generate(ast).code;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `var <name> = <init>;` for a stubbed import binding. */
+function stubBinding(name: string, init: t.Expression): t.VariableDeclaration {
+  return t.variableDeclaration('var', [
+    t.variableDeclarator(t.identifier(name), init),
+  ]);
+}
+
+/** `__req('<source>')`, the stub import target (returns `{}`). */
+function requireCall(source: string): t.CallExpression {
+  return t.callExpression(t.identifier('__req'), [t.stringLiteral(source)]);
+}
+
+/** `module.exports.<exported> = <value>;` (string names need computed). */
+function exportAssignment(
+  exported: t.Identifier | t.StringLiteral,
+  value: string | t.Expression,
+): t.ExpressionStatement {
+  const target = t.memberExpression(
+    t.memberExpression(t.identifier('module'), t.identifier('exports')),
+    exported,
+    t.isStringLiteral(exported),
+  );
+  return t.expressionStatement(
+    t.assignmentExpression(
+      '=',
+      target,
+      typeof value === 'string' ? t.identifier(value) : value,
+    ),
+  );
 }
 
 /**

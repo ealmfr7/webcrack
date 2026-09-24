@@ -1,4 +1,6 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
+import { webcrack } from 'webcrack';
 import { WcError } from '../src/format/errors';
 import { evaluateInModule } from '../src/workspace/sandbox';
 
@@ -52,6 +54,52 @@ describe('evaluateInModule', () => {
     // sanitizeModuleCode closes the dangling comment, so the expression runs.
     const code = `var x = 40;\n/* trailing comment never closed`;
     await expect(evaluateInModule(code, 'x + 2', OPTS)).resolves.toBe('42');
+  });
+
+  test('an ESM module with an exported decoder evaluates', async () => {
+    const code = [
+      "const _0xa = ['hello', 'world'];",
+      'export function _0xd(i) { return _0xa[i]; }',
+    ].join('\n');
+    await expect(evaluateInModule(code, '_0xd(1)', OPTS)).resolves.toBe(
+      'world',
+    );
+  });
+
+  test('a module with imports still evaluates', async () => {
+    const code = [
+      "import decode from './decoder.js';",
+      "import { a as b } from './other.js';",
+      "import * as ns from './ns.js';",
+      "import './side-effect.js';",
+      'var y = 40;',
+    ].join('\n');
+    await expect(evaluateInModule(code, 'y + 2', OPTS)).resolves.toBe('42');
+    await expect(evaluateInModule(code, 'typeof ns', OPTS)).resolves.toBe(
+      'object',
+    );
+  });
+
+  test('an export-default module evaluates', async () => {
+    const code = 'export default function decode(i) { return i * 2; }';
+    await expect(evaluateInModule(code, 'decode(21)', OPTS)).resolves.toBe(
+      '42',
+    );
+    const anonymous = 'export default 40 + 2;';
+    await expect(
+      evaluateInModule(anonymous, 'module.exports.default', OPTS),
+    ).resolves.toBe('42');
+  });
+
+  test('a real webcrack-unpacked ESM module evaluates', async () => {
+    const source = await readFile(
+      new URL('../../webcrack/test/corpus/webpack-5.js', import.meta.url),
+      'utf8',
+    );
+    const { bundle } = await webcrack(source);
+    const mod = bundle?.modules.get('3');
+    expect(mod?.code).toContain('import');
+    await expect(evaluateInModule(mod!.code, '1 + 1', OPTS)).resolves.toBe('2');
   });
 
   test('an injection attempt is rejected before anything runs', async () => {
