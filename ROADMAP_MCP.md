@@ -283,9 +283,9 @@ pisarse:
 **Decisiones de la oleada D**: los findings se precomputan en la caché
 (`findings.json`); `wc_open` acepta el id de 8 hex de un workspace para
 reabrirlo desde caché sin reprocesar; opción `deobfuscated` en la detección
-de técnicas (`techniques`); el sandbox transforma el módulo a ESM antes de
-evaluar la expresión; los constructores de grafos (`wc_graph`) solo encolan
-los nodos aún no visitados.
+de técnicas (`techniques`); el sandbox convierte el módulo de ESM a script
+antes de evaluar la expresión; los constructores de grafos (`wc_graph`) solo
+encolan los nodos aún no visitados.
 
 ### Fase 0: cimientos
 
@@ -323,8 +323,10 @@ los nodos aún no visitados.
       `index` que el fixture (test de contrato); reabrir el mismo input no
       vuelve a llamar a `webcrack()`
       (test con spy); el índice coincide en líneas con `module.code` y cada
-      array del índice va en orden de fuente. El objetivo de reapertura desde
-      caché (< 1 s en un bundle de 5 MB) se vuelve a medir tras la oleada D.
+      array del índice va en orden de fuente. Medido tras la oleada D: en un
+      bundle de 7 MB / 1400 módulos, la reapertura desde caché tarda 540 ms
+      (835 ms incluyendo el arranque del proceso); la primera apertura tarda
+      ~47 s (43 s dentro de webcrack).
 - [x] **M1.3** `tools/open.ts` (`wc_open` + `wc_workspaces`): solo formato con
       la ficha de §3.4, incluyendo técnicas de ofuscación detectadas
       (inferidas de qué pases hicieron cambios o por heurística sobre el
