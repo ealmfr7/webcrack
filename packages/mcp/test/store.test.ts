@@ -1,4 +1,11 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, test } from 'vitest';
@@ -6,6 +13,7 @@ import { webcrack } from 'webcrack';
 import type { Config } from '../src/config';
 import { WcError } from '../src/format/errors';
 import { collectFindings, summarizeFindings } from '../src/workspace/findings';
+import { buildIndex as realBuildIndex } from '../src/workspace/indexer';
 import { WorkspaceStore, type StoreDeps } from '../src/workspace/store';
 import { detectTechniques } from '../src/workspace/techniques';
 import type { LoadedSource, WorkspaceIndex } from '../src/workspace/types';
@@ -545,6 +553,237 @@ test('cached reopen + summarize of a ~2 MB bundle stays well under 1 s', async (
   expect(second.cached).toBe(true);
   expect(summary.counts.sinks).toBe(MODULE_COUNT);
   expect(elapsedMs).toBeLessThan(1000);
+});
+
+const THREE_MODULES: Record<string, string> = {
+  'a.js': 'export function alpha() { return 1; }\n',
+  'b.js':
+    'import { alpha } from "./a.js";\nexport function beta() { return alpha(); }\nbeta();\n',
+  'c.js': 'import { beta } from "./b.js";\nbeta();\n',
+};
+
+/** Deps with the real indexer (so `commit` takes the incremental path) and
+ * a fake `webcrack` that unpacks to the given files. */
+function realIndexDeps(files: Record<string, string>): StoreDeps {
+  const bundleModules = new Map(
+    Object.entries(files).map(([path, code], i) => [
+      String(i),
+      { id: String(i), path, isEntry: i === 0, code },
+    ]),
+  );
+  return testDeps({
+    buildIndex: realBuildIndex,
+    webcrack: (() =>
+      Promise.resolve({
+        code: '<bundle>',
+        bundle: { type: 'webpack', entryId: '0', modules: bundleModules },
+        save: () => Promise.resolve(),
+      })) as unknown as StoreDeps['webcrack'],
+  });
+}
+
+function moduleCode(
+  workspace: { modules: Map<string, { code: string }> },
+  path: string,
+): string {
+  const module = workspace.modules.get(path);
+  if (!module) throw new Error(`open did not create ${path}`);
+  return module.code;
+}
+
+test('incremental commit matches a full rebuild after a rename', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, realIndexDeps(THREE_MODULES));
+  const source = JSON.stringify(THREE_MODULES);
+  const { workspace } = await store.open(source, {}, progressRecorder().fn);
+  expect(workspace.index).toEqual(realBuildIndex(workspace.modules));
+
+  const renamed = moduleCode(workspace, 'b.js').replaceAll('beta', 'gamma');
+  const module = workspace.modules.get('b.js');
+  if (!module) throw new Error('open did not create b.js');
+  module.code = renamed;
+  await store.commit(workspace, ['b.js']);
+  expect(workspace.index).toEqual(realBuildIndex(workspace.modules));
+  expect(
+    workspace.index.symbols
+      .filter((symbol) => symbol.module === 'b.js')
+      .map((symbol) => symbol.name),
+  ).toContain('gamma');
+  // The deep-equal above already pins every cross-module ref; spot-check
+  // that c.js still references the old name.
+  expect(
+    workspace.index.refs.some(
+      (ref) => ref.module === 'c.js' && ref.name === 'beta',
+    ),
+  ).toBe(true);
+});
+
+test('commit after a cache load matches a full rebuild, then stays incremental', async () => {
+  const config = await makeConfig();
+  const source = JSON.stringify(THREE_MODULES);
+  const store = new WorkspaceStore(config, realIndexDeps(THREE_MODULES));
+  await store.open(source, {}, progressRecorder().fn);
+
+  // A fresh store has no kept parts: the workspace comes from the disk
+  // cache, so the first commit falls back to a full rebuild and seeds.
+  const cached = new WorkspaceStore(
+    config,
+    testDeps({
+      buildIndex: realBuildIndex,
+      webcrack: () => {
+        throw new Error('must come from the disk cache');
+      },
+    }),
+  );
+  const second = await cached.open(source, {}, progressRecorder().fn);
+  expect(second.cached).toBe(true);
+  const aModule = second.workspace.modules.get('a.js');
+  if (!aModule) throw new Error('open did not create a.js');
+  aModule.code = 'export function alpha2() { return 2; }\n';
+  await cached.commit(second.workspace, ['a.js']);
+  expect(second.workspace.index).toEqual(
+    realBuildIndex(second.workspace.modules),
+  );
+
+  // The next commit reuses the seeded parts.
+  const bModule = second.workspace.modules.get('b.js');
+  if (!bModule) throw new Error('open did not create b.js');
+  bModule.code = bModule.code.replaceAll('beta', 'gamma');
+  await cached.commit(second.workspace, ['b.js']);
+  expect(second.workspace.index).toEqual(
+    realBuildIndex(second.workspace.modules),
+  );
+});
+
+test('a note-only commit rewrites annotations without touching module files', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, realIndexDeps(THREE_MODULES));
+  const { workspace } = await store.open(
+    JSON.stringify(THREE_MODULES),
+    {},
+    progressRecorder().fn,
+  );
+  const moduleFiles = [...workspace.modules.keys()].map((path) =>
+    join(config.cacheDir, workspace.id, 'modules', path),
+  );
+  const before = await Promise.all(
+    moduleFiles.map((file) => stat(file).then((info) => info.mtimeMs)),
+  );
+
+  workspace.annotations.push({ symbol: 'a.js:alpha', note: 'look here' });
+  await store.commit(workspace, []);
+
+  const after = await Promise.all(
+    moduleFiles.map((file) => stat(file).then((info) => info.mtimeMs)),
+  );
+  expect(after).toEqual(before);
+  const persisted = JSON.parse(
+    await readFile(
+      join(config.cacheDir, workspace.id, 'annotations.json'),
+      'utf8',
+    ),
+  ) as unknown;
+  expect(persisted).toEqual(workspace.annotations);
+  expect(workspace.index).toEqual(realBuildIndex(workspace.modules));
+});
+
+test('commit repairs a cache missing original.js', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, realIndexDeps(THREE_MODULES));
+  const source = JSON.stringify(THREE_MODULES);
+  const { workspace } = await store.open(source, {}, progressRecorder().fn);
+  await rm(join(config.cacheDir, workspace.id, 'original.js'));
+  await store.commit(workspace, ['a.js']);
+  const cached = new WorkspaceStore(
+    config,
+    testDeps({
+      buildIndex: realBuildIndex,
+      webcrack: () => {
+        throw new Error('must come from the disk cache');
+      },
+    }),
+  );
+  const second = await cached.open(source, {}, progressRecorder().fn);
+  expect(second.cached).toBe(true);
+  expect(second.workspace.original).toBe(workspace.original);
+});
+
+test('commit drops a deleted module from the index and the cache', async () => {
+  const config = await makeConfig();
+  const store = new WorkspaceStore(config, realIndexDeps(THREE_MODULES));
+  const { workspace } = await store.open(
+    JSON.stringify(THREE_MODULES),
+    {},
+    progressRecorder().fn,
+  );
+  workspace.modules.delete('c.js');
+  await store.commit(workspace, ['c.js']);
+  expect(workspace.index).toEqual(realBuildIndex(workspace.modules));
+  expect(
+    workspace.index.symbols.some((symbol) => symbol.module === 'c.js'),
+  ).toBe(false);
+  expect(workspace.findings?.['c.js']).toBeUndefined();
+  await expect(
+    readFile(join(config.cacheDir, workspace.id, 'modules', 'c.js'), 'utf8'),
+  ).rejects.toThrow();
+
+  // The pruned cache still reopens cleanly.
+  const cached = new WorkspaceStore(
+    config,
+    testDeps({
+      buildIndex: realBuildIndex,
+      webcrack: () => {
+        throw new Error('must come from the disk cache');
+      },
+    }),
+  );
+  const second = await cached.open(
+    JSON.stringify(THREE_MODULES),
+    {},
+    progressRecorder().fn,
+  );
+  expect(second.cached).toBe(true);
+  expect([...second.workspace.modules.keys()].sort()).toEqual(['a.js', 'b.js']);
+});
+
+test('a rename commit on a ~1,000-module workspace stays well under 3 s', async () => {
+  const config = await makeConfig();
+  const MODULE_COUNT = 1000;
+  const filler = Array.from(
+    { length: 40 },
+    (_, j) => `const q${j} = ${j} * 31 + 7;`,
+  ).join('\n');
+  const files: Record<string, string> = {};
+  for (let i = 0; i < MODULE_COUNT; i++) {
+    files[`mod${i}.js`] =
+      `import { f0 } from "./mod0.js";\n` +
+      `export function f${i}(arg) { return f0(arg) + ${i}; }\n` +
+      `f${i}(1);\n${filler}\n`;
+  }
+  files['mod0.js'] =
+    `export function f0(arg) { return arg; }\n` + `f0(1);\n${filler}\n`;
+  const store = new WorkspaceStore(config, realIndexDeps(files));
+  const { workspace } = await store.open(
+    JSON.stringify(Object.keys(files)),
+    {},
+    progressRecorder().fn,
+  );
+  expect(workspace.modules.size).toBe(MODULE_COUNT);
+
+  const target = workspace.modules.get('mod500.js');
+  if (!target) throw new Error('open did not create mod500.js');
+  target.code = target.code.replaceAll('f500', 'renamed500');
+  const commitStartedAt = Date.now();
+  await store.commit(workspace, ['mod500.js']);
+  const commitMs = Date.now() - commitStartedAt;
+
+  const fullStartedAt = Date.now();
+  const full = realBuildIndex(workspace.modules);
+  const fullMs = Date.now() - fullStartedAt;
+
+  expect(workspace.index).toEqual(full);
+  expect(commitMs).toBeLessThan(3000);
+  expect(fullMs).toBeGreaterThan(commitMs * 2);
 });
 
 test('techniques survive reopening without calling the detector again', async () => {

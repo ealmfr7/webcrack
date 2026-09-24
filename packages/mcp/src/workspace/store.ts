@@ -12,10 +12,11 @@ import { WcError } from '../format/errors';
 import {
   listCachedWorkspaces,
   readWorkspaceFromCache,
+  writeWorkspaceChangesToCache,
   writeWorkspaceToCache,
 } from './cache';
 import { collectModuleAstFindings, precomputeModuleFindings } from './findings';
-import { buildIndex } from './indexer';
+import { buildIndex, indexModule, linkIndex } from './indexer';
 import { loadSource } from './loader';
 import { tagModule } from './tags';
 import { detectTechniques } from './techniques';
@@ -28,6 +29,33 @@ import type {
   Workspace,
   WorkspaceIndex,
 } from './types';
+
+/**
+ * Per-module index slices keyed by workspace, backing incremental `commit`.
+ * Never serialized: it only mirrors `ws.index` for workspaces built with
+ * the real indexer in this process. Workspaces from the disk cache (or
+ * built with an injected `deps.buildIndex`, as in tests) have no entry and
+ * fall back to a full rebuild on the next commit.
+ */
+const indexParts = new WeakMap<Workspace, Map<string, ModuleIndex>>();
+
+/** True when the store uses the real indexer, so parts can be kept. */
+function usesRealIndex(deps: StoreDeps): boolean {
+  return deps.buildIndex === buildIndex;
+}
+
+/** Index every module from scratch and return the parts plus the link. */
+function fullReindex(modules: Map<string, ModuleEntry>): {
+  parts: Map<string, ModuleIndex>;
+  index: WorkspaceIndex;
+} {
+  const paths = [...modules.keys()];
+  const parts = new Map<string, ModuleIndex>();
+  for (const [path, entry] of modules) {
+    parts.set(path, indexModule(entry, paths));
+  }
+  return { parts, index: linkIndex(parts) };
+}
 
 /**
  * Injectable processors, so tests can spy without `vi.mock` and keep
@@ -358,7 +386,18 @@ export class WorkspaceStore {
     }
     await progress(0.7, 'reports extracted');
 
-    const index = this.deps.buildIndex(modules);
+    // With the real indexer, build via indexModule + linkIndex (exactly
+    // what buildIndex does) and keep the per-module parts for commit.
+    // With an injected buildIndex (tests), just call it and keep no parts.
+    let index: WorkspaceIndex;
+    let parts: Map<string, ModuleIndex> | undefined;
+    if (usesRealIndex(this.deps)) {
+      const rebuilt = fullReindex(modules);
+      parts = rebuilt.parts;
+      index = rebuilt.index;
+    } else {
+      index = this.deps.buildIndex(modules);
+    }
     await progress(0.8, 'index built');
 
     for (const module of modules.values()) {
@@ -389,6 +428,7 @@ export class WorkspaceStore {
     };
     await progress(0.92, 'writing cache');
     await writeWorkspaceToCache(this.config, workspace, WEBCRACK_VERSION);
+    if (parts !== undefined) indexParts.set(workspace, parts);
     this.add(workspace);
     await progress(1, `workspace ${id} ready`);
     return { workspace, cached: false };
@@ -396,10 +436,16 @@ export class WorkspaceStore {
 
   /**
    * Persist a mutation (M2.3, shared by every mutating tool): refresh the
-   * derived data for `changedPaths`, reindex the whole workspace, and write
-   * it back to the disk cache. Call it after editing `ws.modules` code or
+   * derived data for `changedPaths`, reindex, and write the changes back to
+   * the disk cache. Call it after editing `ws.modules` code or
    * `ws.annotations` in place; with `[]` (e.g. a note-only annotation) it
-   * just reindexes and persists.
+   * just persists the annotations without touching any module file.
+   *
+   * Reindexing is incremental when the workspace was built with the real
+   * indexer in this process: only `changedPaths` are re-parsed, then the
+   * kept per-module parts are relinked. Without kept parts (a workspace
+   * from the disk cache, or an injected `deps.buildIndex` as in tests) it
+   * falls back to a full rebuild, seeding the parts for the next commit.
    *
    * On a cache load nothing is reapplied: `readWorkspaceFromCache` already
    * reads the renamed `modules/<path>` code and `annotations.json`, so the
@@ -427,13 +473,48 @@ export class WorkspaceStore {
         ws.findings[path] = collectModuleAstFindings(module, { cache: false });
       }
     }
-    ws.index = this.deps.buildIndex(ws.modules);
+    if (usesRealIndex(this.deps)) {
+      let parts = indexParts.get(ws);
+      if (parts === undefined) {
+        const rebuilt = fullReindex(ws.modules);
+        parts = rebuilt.parts;
+        ws.index = rebuilt.index;
+        indexParts.set(ws, parts);
+      } else {
+        // Drop parts for removed modules, then re-parse only the modules
+        // that changed (plus any module missing a part, e.g. added without
+        // being listed in `changedPaths`), and relink over all parts.
+        for (const path of [...parts.keys()]) {
+          if (!ws.modules.has(path)) parts.delete(path);
+        }
+        const paths = [...ws.modules.keys()];
+        const toReindex = new Set<string>();
+        for (const path of changed) {
+          if (ws.modules.has(path)) toReindex.add(path);
+        }
+        for (const path of paths) {
+          if (!parts.has(path)) toReindex.add(path);
+        }
+        for (const path of toReindex) {
+          const module = ws.modules.get(path);
+          if (module !== undefined) parts.set(path, indexModule(module, paths));
+        }
+        ws.index = linkIndex(parts);
+      }
+    } else {
+      ws.index = this.deps.buildIndex(ws.modules);
+    }
     for (const path of changed) {
       const module = ws.modules.get(path);
       if (!module) continue;
       retagModule(module, ws.index, ws.interpreters, this.deps.tagModule);
     }
-    await writeWorkspaceToCache(this.config, ws, WEBCRACK_VERSION);
+    await writeWorkspaceChangesToCache(
+      this.config,
+      ws,
+      changed,
+      WEBCRACK_VERSION,
+    );
   }
 
   /** One-line summaries of every disk-cached workspace (M1.2). */
