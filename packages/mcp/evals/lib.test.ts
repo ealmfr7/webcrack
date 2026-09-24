@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregate,
   aggregateBySet,
+  findMissingTools,
   formatResultsRow,
   median,
   parseStreamJson,
@@ -58,6 +59,21 @@ describe("runCheck", () => {
     };
     expect(runCheck(any, "has beta")).toBe(true);
     expect(runCheck(any, "has neither")).toBe(false);
+  });
+});
+
+describe("findMissingTools", () => {
+  it("returns required tools absent from the server list", () => {
+    expect(
+      findMissingTools(["wc_open", "wc_trace", "wc_read"], ["wc_open", "wc_trace"]),
+    ).toEqual([]);
+    expect(
+      findMissingTools(["wc_open"], ["wc_open", "wc_trace"]),
+    ).toEqual(["wc_trace"]);
+    expect(findMissingTools([], ["wc_open", "wc_trace"])).toEqual([
+      "wc_open",
+      "wc_trace",
+    ]);
   });
 });
 

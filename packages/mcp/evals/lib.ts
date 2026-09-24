@@ -168,6 +168,15 @@ export function runCheck(check: Check, resultText: string): boolean {
   }
 }
 
+/**
+ * Tools the eval dry-run requires the MCP server to expose. Returns the
+ * names from `required` that are absent from `actual`.
+ */
+export function findMissingTools(actual: string[], required: string[]): string[] {
+  const seen = new Set(actual);
+  return required.filter((name) => !seen.has(name));
+}
+
 export interface ParsedRun {
   toolCalls: number;
   webcrackCalls: number;

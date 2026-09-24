@@ -6,8 +6,9 @@
 //
 //   node --experimental-strip-types packages/mcp/evals/run.ts [--dry-run] [--set v1|v2|all]
 //
-// `--dry-run` validates the tasks, checks the samples exist and warns when
-// the server build is missing. It spawns nothing.
+// `--dry-run` validates the tasks, checks the samples exist and starts the
+// built server (`packages/mcp/dist/index.js`) over stdio to verify it serves
+// the expected tools. It spawns our own server, never `claude`.
 
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -22,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   aggregate,
   aggregateBySet,
+  findMissingTools,
   formatResultsRow,
   isEvalSet,
   parseStreamJson,
@@ -260,7 +262,64 @@ function selectTasks(tasks: EvalTask[], options: Pick<Options, "only" | "set">):
   return selected;
 }
 
-function dryRun(options: Pick<Options, "only" | "set">): void {
+const REQUIRED_SERVER_TOOLS = ["wc_open", "wc_trace"];
+
+/**
+ * Spawn the built server over stdio and verify it serves the tools the
+ * evals need. Throws a clear error when the build is missing or the server
+ * fails to start. Spawns our own server, never `claude`.
+ */
+async function checkServerBuild(): Promise<void> {
+  if (!existsSync(SERVER_ENTRY)) {
+    throw new Error(
+      `server build missing (${path.relative(ROOT, SERVER_ENTRY)}); build the mcp package first`,
+    );
+  }
+  let Client: typeof import("@modelcontextprotocol/sdk/client/index.js").Client;
+  let StdioClientTransport: typeof import("@modelcontextprotocol/sdk/client/stdio.js").StdioClientTransport;
+  try {
+    ({ Client } = await import("@modelcontextprotocol/sdk/client/index.js"));
+    ({ StdioClientTransport } =
+      await import("@modelcontextprotocol/sdk/client/stdio.js"));
+  } catch (error) {
+    throw new Error(
+      `cannot load @modelcontextprotocol/sdk, needed to check the server: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [SERVER_ENTRY],
+  });
+  const client = new Client(
+    { name: "webcrack-eval-dry-run", version: "0.0.0" },
+    { capabilities: {} },
+  );
+  try {
+    await client.connect(transport);
+    const tools = (await client.listTools()).tools ?? [];
+    const missing = findMissingTools(
+      tools.map((tool) => tool.name),
+      REQUIRED_SERVER_TOOLS,
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `server is missing required tools: ${missing.join(", ")} (got: ${tools.map((tool) => tool.name).join(", ") || "none"})`,
+      );
+    }
+    console.log(
+      `server check passed: ${path.relative(ROOT, SERVER_ENTRY)} serves ${tools.length} tools (wc_open, wc_trace present)`,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("server ")) throw error;
+    throw new Error(
+      `server failed to start (${path.relative(ROOT, SERVER_ENTRY)}): ${error instanceof Error ? error.message : error}`,
+    );
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+async function dryRun(options: Pick<Options, "only" | "set">): Promise<void> {
   const tasks = loadTasks();
   const selected = selectTasks(tasks, options);
   if (!existsSync(MCP_CONFIG)) throw new Error(`missing ${MCP_CONFIG}`);
@@ -273,14 +332,8 @@ function dryRun(options: Pick<Options, "only" | "set">): void {
   for (const task of selected) {
     console.log(`  ok [${task.set}] ${task.id} (${task.sample})`);
   }
-  if (!existsSync(SERVER_ENTRY)) {
-    console.log(
-      `warning: server build missing (${path.relative(ROOT, SERVER_ENTRY)}); run the mcp build before a real eval`,
-    );
-  } else {
-    console.log("server build present");
-  }
-  console.log("dry-run: nothing spawned");
+  await checkServerBuild();
+  console.log("dry-run: server checked, `claude` not spawned");
 }
 
 async function realRun(options: Options): Promise<void> {
@@ -331,7 +384,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.dryRun) {
-    dryRun(options);
+    await dryRun(options);
     return;
   }
   await realRun(options);
