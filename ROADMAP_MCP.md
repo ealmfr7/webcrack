@@ -322,7 +322,7 @@ pisarse:
       (inferidas de qué pases hicieron cambios o por heurística sobre el
       original). Usa `store.open`/`listCached` de M1.2 y la lógica
       compartida `workspace/findings.ts` de M1.7 para el overview.
-- [ ] **M1.4** `workspace/tags.ts` + `wc_map`: etiquetas `network`, `auth`,
+- [x] **M1.4** `workspace/tags.ts` + `wc_map`: etiquetas `network`, `auth`,
       `crypto`, `storage`, `dom`, `vm`, `vendor` (librería conocida). Heurística
       simple y documentada; tests con el corpus.
 - [x] **M1.5** `wc_outline` y `wc_read` (todos los formatos de `target`,
