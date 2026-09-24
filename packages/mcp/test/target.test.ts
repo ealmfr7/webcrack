@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { WcError } from '../src/format/errors';
 import {
+  matchModules,
   parseTarget,
   resolveModule,
   resolveSymbol,
   resolveTarget,
   resolveThroughImport,
+  symbolsByName,
 } from '../src/format/target';
 import type {
   CallSite,
@@ -192,6 +194,37 @@ describe('resolveSymbol', () => {
     });
   });
 
+  test('bare single import binding follows to its target', () => {
+    const ws = withModules([
+      {
+        path: 'src/alias.js',
+        bundleId: '2',
+        imports: ['src/sign.js'],
+        symbols: [
+          sym('src/alias.js', 's', {
+            kind: 'import',
+            line: 1,
+            endLine: 1,
+            exported: false,
+            importedName: 'sign',
+            from: 'src/sign.js',
+          }),
+        ],
+      },
+    ]);
+    expect(resolveSymbol(ws, 's')).toMatchObject({
+      module: 'src/sign.js',
+      name: 'sign',
+    });
+  });
+
+  test('module:name on an import binding follows to its target', () => {
+    expect(resolveSymbol(fixtureWorkspace(), 'src/api.js:sign')).toMatchObject({
+      module: 'src/sign.js',
+      name: 'sign',
+    });
+  });
+
   test('ambiguous bare name lists only real definitions', () => {
     const ws = withModules([
       {
@@ -337,6 +370,99 @@ describe('resolveThroughImport', () => {
     expect(resolveSymbol(ws, 'sign', 'src/viabarrel.js:2')).toMatchObject({
       module: 'src/sign.js',
       name: 'sign',
+    });
+  });
+
+  test('export * as ns is a namespace, not a star re-export', () => {
+    const ws = withModules([
+      {
+        path: 'src/x.js',
+        bundleId: '2',
+        symbols: [sym('src/x.js', 'foo')],
+      },
+      {
+        path: 'src/barrel.js',
+        bundleId: '3',
+        imports: ['src/x.js'],
+        reexports: [{ name: 'ns', importedName: '*', from: 'src/x.js' }],
+      },
+      {
+        path: 'src/user.js',
+        bundleId: '4',
+        imports: ['src/barrel.js'],
+        symbols: [
+          sym('src/user.js', 'foo', {
+            kind: 'import',
+            line: 1,
+            endLine: 1,
+            exported: false,
+            importedName: 'foo',
+            from: 'src/barrel.js',
+          }),
+          sym('src/user.js', 'ns', {
+            kind: 'import',
+            line: 2,
+            endLine: 2,
+            exported: false,
+            importedName: 'ns',
+            from: 'src/barrel.js',
+          }),
+        ],
+      },
+    ]);
+    // `foo` is not re-exported by the barrel, and `ns` itself is a
+    // namespace, so neither follows anywhere.
+    expect(resolveThroughImport(ws, 'src/user.js', 'foo')).toBeUndefined();
+    expect(resolveThroughImport(ws, 'src/user.js', 'ns')).toBeUndefined();
+  });
+
+  test('export * never re-exports default', () => {
+    const ws = withModules([
+      {
+        path: 'src/x.js',
+        bundleId: '2',
+        symbols: [
+          sym('src/x.js', 'default', {
+            kind: 'function',
+            exported: true,
+          }),
+          sym('src/x.js', 'foo'),
+        ],
+      },
+      {
+        path: 'src/barrel.js',
+        bundleId: '3',
+        imports: ['src/x.js'],
+        reexports: [{ name: '*', importedName: '*', from: 'src/x.js' }],
+      },
+      {
+        path: 'src/user.js',
+        bundleId: '4',
+        imports: ['src/barrel.js'],
+        symbols: [
+          sym('src/user.js', 'd', {
+            kind: 'import',
+            line: 1,
+            endLine: 1,
+            exported: false,
+            importedName: 'default',
+            from: 'src/barrel.js',
+          }),
+          sym('src/user.js', 'foo', {
+            kind: 'import',
+            line: 2,
+            endLine: 2,
+            exported: false,
+            importedName: 'foo',
+            from: 'src/barrel.js',
+          }),
+        ],
+      },
+    ]);
+    expect(resolveThroughImport(ws, 'src/user.js', 'd')).toBeUndefined();
+    expect(resolveThroughImport(ws, 'src/user.js', 'foo')).toMatchObject({
+      module: 'src/x.js',
+      name: 'foo',
     });
   });
 
@@ -553,10 +679,10 @@ describe('resolveTarget', () => {
       start: 8,
       end: 8,
     });
-    expect(resolveTarget(ws, 'src/api.js:8-12')).toEqual({
+    expect(resolveTarget(ws, 'src/api.js:8-9')).toEqual({
       module: 'src/api.js',
       start: 8,
-      end: 12,
+      end: 9,
     });
     const qualified = resolveTarget(ws, 'src/api.js:login');
     expect(qualified.module).toBe('src/api.js');
@@ -573,6 +699,29 @@ describe('resolveTarget', () => {
     expect(resolveTarget(ws, '1')).toEqual({ module: 'src/sign.js' });
     // Symbol-first: a bare symbol never falls through to modules.
     expect(resolveTarget(ws, 'login').symbol).toBeDefined();
+  });
+
+  test('line/range beyond the module throws an actionable error', () => {
+    const ws = fixtureWorkspace();
+    // src/api.js has 9 lines; src/sign.js has 3.
+    for (const bad of ['src/api.js:10', 'src/api.js:8-10', 'src/sign.js:4']) {
+      try {
+        resolveTarget(ws, bad);
+        expect.unreachable(bad);
+      } catch (error) {
+        expect(error).toBeInstanceOf(WcError);
+        expect((error as Error).message).toMatch(/has \d+ lines/);
+        expect((error as Error).message).toContain('valid range 1-');
+      }
+    }
+    try {
+      resolveTarget(ws, 'src/api.js:10');
+      expect.unreachable();
+    } catch (error) {
+      expect((error as Error).message).toBe(
+        'src/api.js has 9 lines; valid range 1-9.',
+      );
+    }
   });
 
   test('errors carry suggestions', () => {
@@ -600,5 +749,66 @@ describe('fixture', () => {
       type: 'esbuild',
       entryId: '0',
     });
+  });
+});
+
+describe('matchModules', () => {
+  test('undefined filter matches all modules', () => {
+    const ws = fixtureWorkspace();
+    expect(
+      matchModules(ws)
+        .map((m) => m.path)
+        .sort(),
+    ).toEqual(['src/api.js', 'src/sign.js']);
+  });
+
+  test('exact path, ./ prefix, and bundle id', () => {
+    const ws = fixtureWorkspace();
+    expect(matchModules(ws, 'src/api.js').map((m) => m.path)).toEqual([
+      'src/api.js',
+    ]);
+    expect(matchModules(ws, './src/api.js').map((m) => m.path)).toEqual([
+      'src/api.js',
+    ]);
+    expect(matchModules(ws, '1').map((m) => m.path)).toEqual(['src/sign.js']);
+  });
+
+  test('folder prefix matches every module under it', () => {
+    const ws = withModules([
+      { path: 'lib/util.js', bundleId: '2', code: 'export {};\n' },
+    ]);
+    expect(
+      matchModules(ws, 'src/')
+        .map((m) => m.path)
+        .sort(),
+    ).toEqual(['src/api.js', 'src/sign.js']);
+    expect(matchModules(ws, 'lib').map((m) => m.path)).toEqual(['lib/util.js']);
+  });
+
+  test('no match throws with suggestions', () => {
+    const ws = fixtureWorkspace();
+    try {
+      matchModules(ws, 'src/ap.js');
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(WcError);
+      expect((error as WcError).suggestions).toContain('src/api.js');
+    }
+  });
+});
+
+describe('symbolsByName', () => {
+  test('groups symbols by name and memoizes per workspace', () => {
+    const ws = fixtureWorkspace();
+    const grouped = symbolsByName(ws);
+    expect(
+      grouped
+        .get('sign')
+        ?.map((s) => s.module)
+        .sort(),
+    ).toEqual(['src/api.js', 'src/sign.js']);
+    expect(grouped.get('login')?.map((s) => s.module)).toEqual(['src/api.js']);
+    expect(grouped.get('missing')).toBeUndefined();
+    expect(symbolsByName(ws)).toBe(grouped);
   });
 });

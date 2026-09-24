@@ -82,7 +82,9 @@ export interface SymbolEntry {
 
 /**
  * One re-exported binding: `export { name } from '…'`, `export { x as name }
- * from '…'`, or `export * from '…'` (recorded with both names as `'*'`).
+ * from '…'`, `export * from '…'` (recorded with both names as `'*'`), or
+ * `export * as ns from '…'` (recorded as `{ name: 'ns', importedName: '*'
+ * }`).
  */
 export interface ReexportEntry {
   /** Name exported from the re-exporting module. */
@@ -257,6 +259,10 @@ export interface Workspace {
   id: string;
   source: { kind: 'path' | 'url' | 'code'; label: string; bytes: number };
   original: string;
+  /**
+   * Bundler output info. `entryId` is the entry module's `bundleId`
+   * (e.g. `'0'`), NOT a module path.
+   */
   bundle?: { type: string; entryId: string };
   /** Keyed by `ModuleEntry.path`. */
   modules: Map<string, ModuleEntry>;
