@@ -251,7 +251,7 @@ pisarse:
       stdio, `defineTool`, stubs de todas las tools, helpers de formato,
       `test/helpers.ts` con `connect()` y `fixtureWorkspace()`, test de humo).
       _Ya preparado._
-- [ ] **M0.2** Exponer en `webcrack` un subpath aditivo `webcrack/analysis`
+- [x] **M0.2** Exponer en `webcrack` un subpath aditivo `webcrack/analysis`
       que reexporte `extractReport`, `moduleGraph`, `callGraph`, `toDot`,
       `toJSON`, `detectInterpreters` y sus tipos; y `createNodeSandbox`.
       Añadir el entry a `packages/webcrack/esbuild.config.js` y a `exports` en
