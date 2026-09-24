@@ -274,6 +274,17 @@ describe('deobfuscated flag', () => {
       detectTechniques(corpus('obfuscator-default.js'), PRETTY_CLEAN),
     ).toEqual(['string-array (rotated) (removed)']);
   });
+
+  test('residue never vetoes a non-rotator removal', () => {
+    // The clean code keeps push/shift calls, but the dead-code shape is
+    // genuinely gone (and no rotator was ever detected), so it is removed.
+    const clean = [
+      'var items = [];\nitems.push(1);\nvar first = items.shift();\nfunction add(a, b) {\n  return a + b;\n}\n',
+    ];
+    expect(detectTechniques(DEAD_CODE, clean)).toEqual([
+      'dead-code-injection (removed)',
+    ]);
+  });
 });
 
 describe('plain code', () => {

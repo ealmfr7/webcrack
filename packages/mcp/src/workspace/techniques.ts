@@ -295,7 +295,18 @@ export function detectTechniques(
   for (const technique of techniques) {
     const label = technique.label(original);
     if (label === undefined) continue;
-    if (removedKnown && deobfuscated && !technique.present(clean) && !residue) {
+    // The residue veto is rotator-specific: only the string-array shape is
+    // rewritten by `unminify` while its decoder calls survive. A residue
+    // from a never-detected decoder must not veto a real removal of any
+    // other technique.
+    const rotationIntact =
+      technique.present === hasStringArrayRotator && residue;
+    if (
+      removedKnown &&
+      deobfuscated &&
+      !technique.present(clean) &&
+      !rotationIntact
+    ) {
       found.push(`${label} (removed)`);
     } else {
       found.push(label);
